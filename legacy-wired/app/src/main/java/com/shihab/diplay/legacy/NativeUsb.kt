@@ -116,7 +116,9 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
         synchronized(lock) {
             check(claimed.isEmpty()) { "Release USB interfaces before reconnecting kernel drivers" }
             detached.toList().forEach { number ->
-                checkResult(NativeUsbIo.reconnect(value, number), "reconnect USB kernel driver $number")
+                UsbConfigurationSwitch.reconnect(number, { driver(value, number) }, {
+                    checkResult(NativeUsbIo.reconnect(value, number), "reconnect USB kernel driver $number")
+                })
                 detached.remove(number)
             }
         }

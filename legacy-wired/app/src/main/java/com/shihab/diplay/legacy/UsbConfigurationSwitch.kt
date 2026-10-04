@@ -17,4 +17,12 @@ internal object UsbConfigurationSwitch {
         // The old interface objects are gone. Do not reconnect these numbers in the new configuration.
         detached.clear()
     }
+    fun reconnect(number: Int, driver: () -> String, connect: () -> Unit) {
+        val owner = driver()
+        check(owner != "usbfs") { "USB interface $number is now owned by another application" }
+        // A paired CDC interface may already have rebound when its control interface reconnected.
+        if (owner.isEmpty()) connect()
+        val restored = driver()
+        check(restored.isNotEmpty() && restored != "usbfs") { "USB kernel driver $number did not rebind" }
+    }
 }

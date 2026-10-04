@@ -42,4 +42,21 @@ class UsbConfigurationSwitchTest {
         } catch (_: IllegalStateException) {}
         assertFalse(selected)
     }
+    @Test fun alreadyReboundPairedDriverDoesNotReceiveASecondConnect() {
+        UsbConfigurationSwitch.reconnect(3, { "cdc_ncm" }, { fail("CONNECT would return EBUSY") })
+    }
+    @Test fun noSuitableDriverCannotBeReportedAsRestored() {
+        var connected = false
+        try {
+            UsbConfigurationSwitch.reconnect(2, { "" }, { connected = true })
+            fail("Reported an unbound driver as restored")
+        } catch (e: IllegalStateException) { assertTrue(e.message!!.contains("did not rebind")) }
+        assertTrue(connected)
+    }
+    @Test fun foreignClientIsNotMistakenForAReboundKernelDriver() {
+        try {
+            UsbConfigurationSwitch.reconnect(2, { "usbfs" }, { fail("Evicted a foreign client") })
+            fail("Accepted foreign client")
+        } catch (e: IllegalStateException) { assertTrue(e.message!!.contains("another application")) }
+    }
 }
