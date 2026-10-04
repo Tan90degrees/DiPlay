@@ -174,6 +174,36 @@ SU 实现与强制结束行为仍需实测，不能保证所有 Root 管理器�
 拔线或清理失败会记录具体错误，请重新插拔手机。成功日志应同时有接口读回、释放、
 原配置恢复（发生配置切换时）和「USB 接口自测通过」；提供这些日志才能判断下一步。
 
+### 0.1.5：T3 USB EBUSY 与 SU 诊断修正
+
+0.1.4 真机已通过配置 5 选择与 MUX 1/0 占用。NCM 控制接口的占用前读取返回
+`errno=16`，恢复配置 1 也失败；后续原配置为 5 的测试仍在相同位置失败。
+Linux 3.10 的 [usbfs 实现](https://github.com/torvalds/linux/blob/v3.10/drivers/usb/core/devio.c)
+会为接口控制请求隐式 claim，内核驱动占用时返回 EBUSY。这也意味着释放后
+GET_INTERFACE 会重新占用接口，不能用于无副作用的最终状态检查。
+
+0.1.5 在明确 claim 后才发送 GET_INTERFACE，claim 前和 release 后从该授权设备的
+sysfs 读取 alternate。地址按 USB busnum/devnum 匹配；属性不可读时报告失败，不假定为零。
+切换配置前释放自有接口并临时断开该设备的内核驱动，包括未参加自测的其他 NCM 功能；
+拒绝夺取其他 usbfs 应用的接口。恢复配置后才重连临时断开的驱动，避免 EBUSY；
+成功切换配置会使旧接口失效，不把旧驱动接口号重连到新配置。清理后的状态变化仍报告失败。
+这些修改需要新一轮真机验证，不代表 NCM bulk 或认证已成功。
+
+Root 自测同次报告中普通 UDP bind 通过，但 sendto 仍为 EPERM；IPv6 未禁用，
+INTERNET 权限正常。启用 Root 后 su 约 70 ms 退出，未建立规则；该报告没有具体拒绝原因。
+0.1.5 先用只读 `id` 验证实际 UID=0，检查 `/system/xbin/su`、`/system/bin/su` 的
+`-c` 和旧式 `su 0 /system/bin/sh -c` 调用，只有检查成功才运行原有临时规则脚本。
+显式权限拒绝时不对同一二进制重试其他参数。日志记录调用方式、退出码和已识别原因，
+不发布任意 shell 输出；退出时无换行的错误也会保留用于分类。
+[AOSP 的部分旧式 su](https://android.googlesource.com/platform/system/extras/+/906d825/su/su.c)
+仅允许 root/shell 调用，所以 ADB 可执行 su 不代表普通应用也能获得 Root。
+
+安装 0.1.5 后重新插拔 iPhone，再运行 USB 接口自测；预期分别出现 MUX、NCM 控制、
+NCM 数据的占用与读回，以及清理通过。普通网络的已知 EPERM 无需反复测试；主动启用
+Root 模式后运行网络自测，提供 Root UID 检查和后续规则/回包/清理日志。
+若显示应用 UID 不允许调用，需支持应用授权的 Root 管理器；参数兼容不能改变该权限限制。
+源码 APK 的缺少认证身份提示仍符合预期。
+
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |

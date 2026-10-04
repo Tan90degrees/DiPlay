@@ -11,9 +11,11 @@ internal interface UsbProbeIo {
     fun currentConfiguration(): Int
     fun select(value: Int)
     fun currentAlternate(number: Int): Int
+    fun observedAlternate(number: Int): Int
     fun claim(number: Int)
     fun alternate(number: Int, value: Int)
     fun releaseClaims()
+    fun reconnectDrivers()
 }
 
 internal object UsbInterfaceProbe {
@@ -21,15 +23,18 @@ internal object UsbInterfaceProbe {
         if (cancelled.get()) return
         check(manager.hasPermission(device)) { "USB 权限已失效" }
         val connection = checkNotNull(manager.openDevice(device)) { "USB openDevice 返回空" }
+        val observed = UsbSysfsState(device.deviceName)
         try { NativeUsb(connection).use { usb ->
             run(object : UsbProbeIo {
                 override fun configurations() = usb.configurations()
                 override fun currentConfiguration() = usb.currentConfiguration()
                 override fun select(value: Int) { usb.selectValue(value) }
                 override fun currentAlternate(number: Int) = usb.currentAlternate(number)
+                override fun observedAlternate(number: Int) = observed.alternate(number)
                 override fun claim(number: Int) { usb.claimInterface(number) }
                 override fun alternate(number: Int, value: Int) { usb.setAlternate(number, value) }
-                override fun releaseClaims() { usb.releaseClaims() }
+                override fun releaseClaims() { usb.releaseClaims(reconnect = false) }
+                override fun reconnectDrivers() { usb.reconnectDrivers() }
             }, cancelled, report)
         } } finally { connection.close() }
     }
@@ -48,7 +53,7 @@ internal object UsbInterfaceProbe {
         // Changing configuration resets alternate settings. Do not discard a nondefault active setting.
         if (original != config.value) previous?.interfaces?.groupBy { it.number }?.forEach { (number, alternates) ->
             if (alternates.size > 1 || alternates.single().alternate != 0) {
-                check(io.currentAlternate(number) == 0) { "原配置接口 $number 使用非默认 alternate，请重新插拔后自测" }
+                check(io.observedAlternate(number) == 0) { "原配置接口 $number 使用非默认 alternate，请重新插拔后自测" }
             }
         }
         if (cancelled.get()) return
@@ -63,9 +68,10 @@ internal object UsbInterfaceProbe {
             io.select(config.value)
             check(io.currentConfiguration() == config.value) { "USB 配置读回不匹配" }
             report("USB 接口自测：配置 ${config.value} 选择与读回通过")
+            // Snapshot all targets before a driver disconnect can also reset its paired interface.
+            targets.forEach { (_, alternate) -> saved[alternate.number] = io.observedAlternate(alternate.number) }
             for ((name, alternate) in targets) {
                 if (cancelled.get()) break
-                saved[alternate.number] = io.currentAlternate(alternate.number)
                 report("USB 接口自测：准备占用 $name ${alternate.number}/${alternate.alternate}")
                 io.claim(alternate.number)
                 claimed += alternate // Track even if selecting the alternate subsequently fails.
@@ -96,10 +102,11 @@ internal object UsbInterfaceProbe {
                 io.select(original)
                 check(io.currentConfiguration() == original) { "恢复配置读回不匹配" }
             }
+            cleanup("已恢复临时断开的内核驱动") { io.reconnectDrivers() }
             cleanup("释放后的原状态读回通过") {
                 check(io.currentConfiguration() == original) { "释放后 USB 配置已变化" }
                 if (original == config.value) saved.forEach { (number, value) ->
-                    check(io.currentAlternate(number) == value) { "释放后接口 $number 的 alternate 已变化" }
+                    check(io.observedAlternate(number) == value) { "释放后接口 $number 的 alternate 已变化" }
                 }
             }
         }

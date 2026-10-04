@@ -65,7 +65,9 @@ internal object RootIpv6Compatibility {
         check(Build.VERSION.SDK_INT < 21) { "Root IPv6 兼容仅面向 Android 4.4" }
         check(!cancelled.get()) { "Root 网络设置已取消" }
         val tag = "diplay_" + UUID.randomUUID().toString().replace("-", "")
-        val process = ProcessBuilder("su", "-c", script(iface, Process.myUid(), tag)).redirectErrorStream(true).start()
+        val invocation = SuAccess.select(cancelled, report)
+        check(!cancelled.get()) { "Root 网络设置已取消" }
+        val process = ProcessBuilder(invocation.command(script(iface, Process.myUid(), tag))).redirectErrorStream(true).start()
         val lease = RootRuleLease(process, report)
         try {
             report("Root IPv6：请允许 su；仅为本应用 UID=${Process.myUid()}、$iface、fe80::/64 建立临时例外")
@@ -85,6 +87,13 @@ internal class RootRuleLease(private val process: java.lang.Process, private val
     private val installed = AtomicBoolean(false)
     private val removed = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
+    private val errors = StringBuilder()
+    private fun acceptLine(text: String) {
+        if (text == RootIpv6Compatibility.READY) installed.set(true)
+        if (text == RootIpv6Compatibility.REMOVED) removed.set(true)
+        if (text.startsWith("DIPLAY_IPV6_")) messages.offer(text)
+        else synchronized(errors) { if (errors.length < 1024) errors.append(text.take(256)).append('\n') }
+    }
     private val reader = Thread({
         try {
             // Bound each line and queue; never publish arbitrary shell output or firewall contents.
@@ -92,12 +101,10 @@ internal class RootRuleLease(private val process: java.lang.Process, private val
                 val line = StringBuilder()
                 while (true) {
                     val value = input.read()
-                    if (value < 0) break
+                    if (value < 0) { if (line.isNotEmpty()) acceptLine(line.toString().trim()); break }
                     if (value == 10) {
                         val text = line.toString().trim(); line.setLength(0)
-                        if (text == RootIpv6Compatibility.READY) installed.set(true)
-                        if (text == RootIpv6Compatibility.REMOVED) removed.set(true)
-                        messages.offer(text)
+                        acceptLine(text)
                     } else if (line.length < 256) line.append(value.toChar())
                 }
             }
@@ -110,7 +117,10 @@ internal class RootRuleLease(private val process: java.lang.Process, private val
             val text = messages.poll(100, TimeUnit.MILLISECONDS)
             if (text == RootIpv6Compatibility.READY || text == RootIpv6Compatibility.NOT_NEEDED) return text
             if (text?.startsWith("DIPLAY_IPV6_") == true) error("Root 网络失败：$text")
-            if (done.get() && messages.isEmpty()) error("su 被拒绝或不支持当前规则；未确认 Root 网络设置")
+            if (done.get() && messages.isEmpty()) {
+                val exit = try { process.exitValue().toString() } catch (_: IllegalThreadStateException) { "未退出" }
+                error("Root 规则进程未就绪：exit=$exit；${RootFailure.reason(synchronized(errors) { errors.toString() })}")
+            }
         }
         error(if (cancelled.get()) "Root 网络设置已取消" else "等待 su 授权超时，请授权后重试")
     }

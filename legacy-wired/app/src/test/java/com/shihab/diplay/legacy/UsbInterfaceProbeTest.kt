@@ -18,6 +18,7 @@ class UsbInterfaceProbeTest {
         var active = 1
         var configs: List<UsbConfigurationData> = emptyList()
         val alternates = mutableMapOf<Int, Int>()
+        val held = mutableSetOf<Int>()
         var failAt: String? = null
         var after: (String) -> Unit = {}
         private fun event(value: String) {
@@ -28,10 +29,15 @@ class UsbInterfaceProbeTest {
         override fun configurations(): List<UsbConfigurationData> { event("configs"); return configs }
         override fun currentConfiguration(): Int { event("get-config"); return active }
         override fun select(value: Int) { event("select:$value"); if (value != active) alternates.clear(); active = value }
-        override fun currentAlternate(number: Int): Int { event("get-alt:$number"); return alternates[number] ?: 0 }
-        override fun claim(number: Int) { event("claim:$number") }
+        override fun currentAlternate(number: Int): Int {
+            check(number in held) { "GET_INTERFACE would implicitly claim an unowned interface" }
+            event("get-alt:$number"); return alternates[number] ?: 0
+        }
+        override fun observedAlternate(number: Int): Int { event("observe-alt:$number"); return alternates[number] ?: 0 }
+        override fun claim(number: Int) { held += number; event("claim:$number") }
         override fun alternate(number: Int, value: Int) { event("alt:$number/$value"); alternates[number] = value }
-        override fun releaseClaims() { event("release") }
+        override fun releaseClaims() { event("release"); held.clear() }
+        override fun reconnectDrivers() { event("reconnect") }
     }
     private fun io() = FakeIo().apply { configs = listOf(UsbConfigurationData(1, listOf(UsbAlternate(0, 0, 6, 1, 1))), carPlay(), carPlay(6)) }
     private fun run(io: FakeIo, cancelled: AtomicBoolean = AtomicBoolean(false)): List<String> {
@@ -46,6 +52,7 @@ class UsbInterfaceProbeTest {
         assertEquals(listOf("claim:1", "claim:2", "claim:3"), io.events.filter { it.startsWith("claim:") })
         assertFalse(io.events.contains("select:6"))
         assertTrue(io.events.indexOf("release") < io.events.indexOf("select:1"))
+        assertTrue(io.events.indexOf("select:1") < io.events.indexOf("reconnect"))
         assertTrue(messages.last().contains("自测通过"))
         assertTrue(messages.last().contains("bulk"))
     }
@@ -130,11 +137,27 @@ class UsbInterfaceProbeTest {
         assertFalse(messages.any { it.contains("自测通过") })
     }
     @Test fun kernelDriverChangingAnAlternateAfterReleaseDoesNotProduceASuccessReport() {
-        val io = io().apply { active = 5; after = { if (it == "release") alternates[3] = 1 } }
+        val io = io().apply { active = 5; after = { if (it == "reconnect") alternates[3] = 1 } }
         val messages = mutableListOf<String>()
         try { UsbInterfaceProbe.run(io, AtomicBoolean(false), messages::add); fail("Accepted post-release state drift") }
         catch (e: IllegalStateException) { assertTrue(e.message!!.contains("alternate 已变化")) }
         assertTrue(messages.any { it.contains("清理失败") })
         assertFalse(messages.any { it.contains("自测通过") })
+    }
+    @Test fun doesNotUseImplicitClaimsBeforeClaimingOrAfterRelease() {
+        val io = io().apply { active = 5 }
+        run(io)
+        assertEquals(emptySet<Int>(), io.held)
+        val release = io.events.indexOf("release")
+        assertFalse(io.events.drop(release).any { it.startsWith("get-alt:") })
+        assertTrue(io.events.drop(release).any { it.startsWith("observe-alt:") })
+        assertTrue(io.events.indexOf("claim:2") < io.events.indexOf("get-alt:2"))
+    }
+    @Test fun unreadableSysfsDoesNotClaimInterfacesAndStillRestoresConfiguration() {
+        val io = io().apply { failAt = "observe-alt:2" }
+        try { run(io); fail("Accepted missing state snapshot") } catch (_: IOException) {}
+        assertFalse(io.events.any { it.startsWith("claim:") })
+        assertEquals(1, io.active)
+        assertTrue(io.events.contains("reconnect"))
     }
 }

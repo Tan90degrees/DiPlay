@@ -90,4 +90,15 @@ class RootIpv6CompatibilityTest {
         assertFalse(output.contains(RootIpv6Compatibility.READY))
         assertEquals(1, log.readLines().size)
     }
+    @Test(timeout = 10000) fun earlyFailureWithoutNewlineIncludesRecognizedReasonAndExitCode() {
+        assumeFalse(System.getProperty("os.name").lowercase().contains("windows"))
+        val process = ProcessBuilder("sh", "-c", "printf 'su: permission denied'; exit 7").redirectErrorStream(true).start()
+        val lease = RootRuleLease(process, {})
+        try {
+            lease.awaitReady(AtomicBoolean(false)); fail("Accepted early su exit")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("exit=7"))
+            assertTrue(e.message!!.contains("拒绝权限"))
+        } finally { lease.close() }
+    }
 }

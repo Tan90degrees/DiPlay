@@ -24,7 +24,7 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
         finally { synchronized(lock) { users--; releaseIfIdle() } }
     }
     fun control(type: Int, request: Int, value: Int, index: Int, bytes: ByteArray, timeout: Int = 1000): Int =
-        useFd { NativeUsbIo.control(it, type, request, value, index, bytes, timeout).also { n -> checkResult(n, "USB control") } }
+        useFd { NativeUsbIo.control(it, type, request, value, index, bytes, timeout).also { n -> checkResult(n, "USB control type=$type request=$request index=$index") } }
 
     fun configurations(): List<UsbConfigurationData> {
         val device = ByteArray(18)
@@ -48,14 +48,34 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
     }
     fun currentAlternate(number: Int): Int {
         require(number in 0..255)
+        synchronized(lock) { check(number in claimed) { "GET_INTERFACE requires an explicitly claimed interface $number" } }
         val bytes = ByteArray(1)
         if (control(0x81, 10, 0, number, bytes) != 1) throw IOException("Short USB GET_INTERFACE ($number)")
         return bytes[0].toInt() and 255
     }
     fun select(configuration: UsbConfigurationData) = selectValue(configuration.value)
-    fun selectValue(configuration: Int) = useFd {
+    fun selectValue(configuration: Int): Unit = useFd { value ->
         require(configuration in 0..255)
-        checkResult(NativeUsbIo.configuration(it, configuration), "select USB configuration $configuration")
+        synchronized(lock) {
+            if (currentConfiguration() != configuration) {
+                check(users == 1 && claimed.isEmpty()) { "Release USB IO and interfaces before changing configuration" }
+                val active = currentConfiguration()
+                val numbers = configurations().firstOrNull { it.value == active }?.interfaces?.map { it.number }?.distinct()
+                    ?: if (active == 0) emptyList() else error("Unknown active USB configuration $active")
+                try {
+                    UsbConfigurationSwitch.change(numbers, detached, { driver(value, it) }, {
+                        checkResult(NativeUsbIo.disconnect(value, it), "detach USB kernel driver $it")
+                    }, {
+                        checkResult(NativeUsbIo.configuration(value, configuration), "select USB configuration $configuration")
+                    })
+                } catch (e: Exception) {
+                    // A failing vendor SETCONFIGURATION may nevertheless have changed the device.
+                    // Avoid reconnecting old interface numbers to an unrelated new configuration.
+                    try { if (currentConfiguration() != active) detached.clear() } catch (_: Exception) {}
+                    throw e
+                }
+            }
+        }
     }
     fun claim(alternate: UsbAlternate) {
         claimInterface(alternate.number)
@@ -73,10 +93,11 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
     }
     fun setAlternate(number: Int, alternate: Int) = useFd {
         require(number in 0..255 && alternate in 0..255)
+        synchronized(lock) { check(number in claimed) { "SET_INTERFACE requires an explicitly claimed interface $number" } }
         checkResult(NativeUsbIo.alternate(it, number, alternate), "select USB alternate $number/$alternate")
     }
     /** Only for an exclusive diagnostic owner; keep failed releases tracked for close() to retry. */
-    fun releaseClaims(): Unit = useFd { value ->
+    fun releaseClaims(reconnect: Boolean = true): Unit = useFd { value ->
         synchronized(lock) {
             check(users == 1) { "USB IO still running" }
             var failure: UsbIoException? = null
@@ -85,11 +106,26 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
                 if (result < 0) { if (failure == null) failure = UsbIoException("release USB interface $number", -result) }
                 else {
                     claimed.remove(number)
-                    if (detached.remove(number)) NativeUsbIo.reconnect(value, number)
                 }
             }
             failure?.let { throw it }
+            if (reconnect) reconnectDrivers()
         }
+    }
+    fun reconnectDrivers(): Unit = useFd { value ->
+        synchronized(lock) {
+            check(claimed.isEmpty()) { "Release USB interfaces before reconnecting kernel drivers" }
+            detached.toList().forEach { number ->
+                checkResult(NativeUsbIo.reconnect(value, number), "reconnect USB kernel driver $number")
+                detached.remove(number)
+            }
+        }
+    }
+    private fun driver(value: Int, number: Int): String {
+        val bytes = ByteArray(256)
+        val size = NativeUsbIo.driver(value, number, bytes)
+        checkResult(size, "read USB kernel driver $number")
+        return String(bytes, 0, size, Charsets.US_ASCII)
     }
     fun read(pipe: UsbPipe, timeoutMillis: Long): ByteArray? = useFd {
         require(pipe.input && pipe.bulk && timeoutMillis > 0)
@@ -143,7 +179,9 @@ object NativeUsbIo {
     external fun alternate(fd: Int, number: Int, alternate: Int): Int
     external fun bulk(fd: Int, endpoint: Int, data: ByteArray, offset: Int, length: Int, timeout: Int): Int
     external fun release(fd: Int, number: Int): Int
-    external fun reconnect(fd: Int, number: Int)
+    external fun driver(fd: Int, number: Int, name: ByteArray): Int
+    external fun disconnect(fd: Int, number: Int): Int
+    external fun reconnect(fd: Int, number: Int): Int
     external fun close(fd: Int)
     external fun tunRead(fd: Int, data: ByteArray, timeout: Int): Int
     external fun tunName(fd: Int): String?

@@ -50,6 +50,9 @@ JNIEXPORT jint JNICALL JNI_METHOD(claim)(JNIEnv *env, jobject self, jint fd, jin
     unsigned int interface_number = number;
     if (ioctl(fd, USBDEVFS_CLAIMINTERFACE, &interface_number) == 0) return 0;
     if (errno != EBUSY) return -errno;
+    struct usbdevfs_getdriver owner = { .interface = number };
+    if (ioctl(fd, USBDEVFS_GETDRIVER, &owner) < 0) return -errno;
+    if (strcmp(owner.driver, "usbfs") == 0) return -EBUSY;
     // Android's force-claim equivalent. No root is needed if UsbManager authorized the fd.
     struct usbdevfs_ioctl disconnect = { .ifno = number, .ioctl_code = USBDEVFS_DISCONNECT, .data = NULL };
     if (ioctl(fd, USBDEVFS_IOCTL, &disconnect) < 0) return -errno;
@@ -82,10 +85,27 @@ JNIEXPORT jint JNICALL JNI_METHOD(release)(JNIEnv *env, jobject self, jint fd, j
     unsigned int interface_number = number;
     return ioctl(fd, USBDEVFS_RELEASEINTERFACE, &interface_number) < 0 ? -errno : 0;
 }
-JNIEXPORT void JNICALL JNI_METHOD(reconnect)(JNIEnv *env, jobject self, jint fd, jint number) {
+JNIEXPORT jint JNICALL JNI_METHOD(driver)(JNIEnv *env, jobject self, jint fd, jint number, jbyteArray name) {
+    (void)self;
+    struct usbdevfs_getdriver owner;
+    memset(&owner, 0, sizeof(owner));
+    owner.interface = number;
+    if (ioctl(fd, USBDEVFS_GETDRIVER, &owner) < 0) return errno == ENODATA ? 0 : -errno;
+    owner.driver[sizeof(owner.driver) - 1] = '\0';
+    size_t length = strlen(owner.driver);
+    if (length > (size_t)(*env)->GetArrayLength(env, name)) return -EINVAL;
+    (*env)->SetByteArrayRegion(env, name, 0, length, (jbyte *)owner.driver);
+    return length;
+}
+JNIEXPORT jint JNICALL JNI_METHOD(disconnect)(JNIEnv *env, jobject self, jint fd, jint number) {
+    UNUSED();
+    struct usbdevfs_ioctl disconnect = { .ifno = number, .ioctl_code = USBDEVFS_DISCONNECT, .data = NULL };
+    return ioctl(fd, USBDEVFS_IOCTL, &disconnect) < 0 ? -errno : 0;
+}
+JNIEXPORT jint JNICALL JNI_METHOD(reconnect)(JNIEnv *env, jobject self, jint fd, jint number) {
     UNUSED();
     struct usbdevfs_ioctl connect = { .ifno = number, .ioctl_code = USBDEVFS_CONNECT, .data = NULL };
-    ioctl(fd, USBDEVFS_IOCTL, &connect);
+    return ioctl(fd, USBDEVFS_IOCTL, &connect) < 0 ? -errno : 0;
 }
 JNIEXPORT void JNICALL JNI_METHOD(close)(JNIEnv *env, jobject self, jint fd) { UNUSED(); close(fd); }
 JNIEXPORT jint JNICALL JNI_METHOD(tunRead)(JNIEnv *env, jobject self, jint fd, jbyteArray data, jint timeout) {
