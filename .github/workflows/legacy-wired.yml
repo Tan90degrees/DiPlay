@@ -1,0 +1,43 @@
+name: Legacy wired Android 4.4
+on:
+  push:
+    branches: [codex/android-4.4-wired]
+    paths: ['legacy-wired/**', 'shared/**', '.github/workflows/legacy-wired.yml']
+  pull_request:
+    paths: ['legacy-wired/**', 'shared/**', '.github/workflows/legacy-wired.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  legacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check public source
+        run: python3 scripts/check_public_tree.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0 ndk;25.2.9519653'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: API 19 and 21 tests, compatibility lint and ARMv7 APK
+        working-directory: legacy-wired
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Diagnostic APK (no authentication identity)
+        uses: actions/upload-artifact@v4
+        with:
+          name: diplay-legacy-wired-source-only
+          path: legacy-wired/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Test and compatibility reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-wired-reports
+          path: |
+            legacy-wired/app/build/reports/tests/
+            legacy-wired/app/build/reports/lint-results-debug.*
