@@ -129,4 +129,12 @@ class UsbInterfaceProbeTest {
         assertTrue(messages.any { it.contains("清理失败") && it.contains("重新插拔") })
         assertFalse(messages.any { it.contains("自测通过") })
     }
+    @Test fun kernelDriverChangingAnAlternateAfterReleaseDoesNotProduceASuccessReport() {
+        val io = io().apply { active = 5; after = { if (it == "release") alternates[3] = 1 } }
+        val messages = mutableListOf<String>()
+        try { UsbInterfaceProbe.run(io, AtomicBoolean(false), messages::add); fail("Accepted post-release state drift") }
+        catch (e: IllegalStateException) { assertTrue(e.message!!.contains("alternate 已变化")) }
+        assertTrue(messages.any { it.contains("清理失败") })
+        assertFalse(messages.any { it.contains("自测通过") })
+    }
 }

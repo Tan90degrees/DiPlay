@@ -96,6 +96,12 @@ internal object UsbInterfaceProbe {
                 io.select(original)
                 check(io.currentConfiguration() == original) { "恢复配置读回不匹配" }
             }
+            cleanup("释放后的原状态读回通过") {
+                check(io.currentConfiguration() == original) { "释放后 USB 配置已变化" }
+                if (original == config.value) saved.forEach { (number, value) ->
+                    check(io.currentAlternate(number) == value) { "释放后接口 $number 的 alternate 已变化" }
+                }
+            }
         }
         failure?.let { throw it }
         report(if (complete) "USB 接口自测通过：配置、MUX/NCM 占用与 alternate；bulk 传输、认证和 CarPlay 仍需另测" else "USB 接口自测已取消，清理完成")
