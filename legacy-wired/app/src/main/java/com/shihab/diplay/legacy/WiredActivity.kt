@@ -18,10 +18,11 @@ import com.shilapi.xcertplay.airplay.AirPlayContact
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class WiredActivity : Activity(), SurfaceHolder.Callback {
     private val ui = Handler(Looper.getMainLooper())
-    private val log = java.util.ArrayDeque<String>()
+    private val log = DiagnosticLog()
     private lateinit var status: TextView
     private lateinit var sink: LegacyMediaSink
     private lateinit var manager: UsbManager
@@ -33,6 +34,8 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private var bound = false
     private var desired = false
     private var permissionDevice: String? = null
+    private var diagnoseAfterPermission = false
+    private var diagnosticCancellation: AtomicBoolean? = null
     @Volatile private var switching = false
     private var switchDevice: String? = null
     private var switchDeadline = 0L
@@ -56,8 +59,11 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
                     if (device?.deviceName != permissionDevice) return
                     permissionDevice = null
                     // Verify UsbManager's state rather than trusting extras from a broadcast.
-                    if (device != null && manager.hasPermission(device)) { if (desired) scan() }
-                    else { desired = false; report("USB 授权被拒绝，请重新点击连接") }
+                    val pendingDiagnostic = diagnoseAfterPermission
+                    diagnoseAfterPermission = false
+                    if (device != null && manager.hasPermission(device)) {
+                        if (pendingDiagnostic) diagnose() else if (desired) scan()
+                    } else { desired = false; report("USB 授权被拒绝，请重新点击连接或设备诊断") }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (desired) scan()
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -107,13 +113,14 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         fun button(text: String, action: () -> Unit) { buttons.addView(Button(this).apply { this.text = text; setOnClickListener { action() } }) }
         button("连接") { begin() }
         button("断开") { disconnect(); report("已断开") }
-        button("USB 诊断") { diagnose() }
-        button("日志") { AlertDialog.Builder(this).setTitle("诊断日志").setMessage(log.joinToString("\n")).setPositiveButton("关闭", null).show() }
+        button("设备诊断") { diagnose() }
+        button("H.264 测试") { probeDecoder() }
+        button("日志") { showLog() }
         button("重置配对") {
             if (busy) { report("请先断开，等待连接清理完成"); return@button }
             LegacyIdentity(this).resetPhone(); report("已清除手机配对，下次连接请重新信任")
         }
-        panel.addView(buttons)
+        panel.addView(HorizontalScrollView(this).apply { addView(buttons) })
         status = TextView(this).apply { setTextColor(-1); textSize = 14f; setPadding(12, 0, 12, 8) }
         panel.addView(status)
         root.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
@@ -128,6 +135,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     }
     private fun begin() {
         if (busy) { report("连接运行或清理中，请稍候"); return }
+        if (permissionDevice != null) { report("请先完成 USB 授权，或点击断开取消"); return }
         val permission = VpnService.prepare(this)
         if (permission != null) startActivityForResult(permission, 19) else startConnection()
     }
@@ -177,46 +185,111 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         newController.start()
     }
     private fun disconnect() {
-        desired = false; switching = false; permissionDevice = null
+        desired = false; switching = false; permissionDevice = null; diagnoseAfterPermission = false
+        diagnosticCancellation?.set(true)
         ui.removeCallbacks(rescan)
         controller?.close()
         touches.queue.clear()
         audioManager.abandonAudioFocus(focus)
     }
     private fun diagnose() {
-        if (busy) { report("请先断开，再执行 USB 诊断"); return }
+        if (busy || desired) { report("请先断开并等待清理，再执行设备诊断"); return }
         val phones = manager.deviceList.values.filter { it.vendorId == 0x05ac }
-        if (phones.size != 1) { report("未找到唯一的 Apple USB 设备"); return }
-        val device = phones.single()
-        if (!manager.hasPermission(device)) { usbPermission(device); report("授权后请再次点击 USB 诊断"); return }
-        busy = true
-        Thread({
+        val device = phones.singleOrNull()
+        if (device != null && !manager.hasPermission(device)) {
+            diagnoseAfterPermission = true; usbPermission(device); return
+        }
+        diagnosticJob { cancelled ->
+            report("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}；${Build.MANUFACTURER} / ${Build.MODEL}；ABI=${Build.CPU_ABI}")
+            report("USB Host=${packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)}；USB 设备数=${manager.deviceList.size}；Apple 设备数=${phones.size}")
+            manager.deviceList.values.forEach { report("USB VID:PID=${DiagnosticReport.hex(it.vendorId)}:${DiagnosticReport.hex(it.productId)}；授权=${manager.hasPermission(it)}") }
+            // USB failure must not suppress the independent codec inventory.
             try {
-                val connection = checkNotNull(manager.openDevice(device))
-                try { NativeUsb(connection).use { usb ->
-                    usb.configurations().forEach { config ->
-                        report("USB config=${config.value} CarPlay=${config.carPlay}; " + config.interfaces.joinToString { "if=${it.number}/${it.alternate} class=${it.deviceClass}/${it.subclass}/${it.protocol}" })
-                    }
-                } } finally { connection.close() }
-                for (index in 0 until MediaCodecList.getCodecCount()) {
-                    val codec = MediaCodecList.getCodecInfoAt(index)
-                    if (!codec.isEncoder && codec.supportedTypes.any { it == "video/avc" }) report("H.264 解码器：${codec.name}")
+                if (device == null) report("USB：请只连接一台 iPhone 后再诊断；解码器检查继续")
+                else if (!cancelled.get()) {
+                    val connection = checkNotNull(manager.openDevice(device)) { "USB openDevice 返回空" }
+                    try { NativeUsb(connection).use { usb ->
+                        val active = ByteArray(1)
+                        if (usb.control(0x80, 8, 0, 0, active) == 1) report("USB 当前配置=${active[0].toInt() and 255}")
+                        usb.configurations().forEach { config ->
+                            if (!cancelled.get()) {
+                                report("USB config=${config.value} CarPlay=${config.carPlay}；MUX=${config.mux != null}；NCM=${config.ncmControl != null && config.ncmData != null}")
+                                config.interfaces.forEach { alternate ->
+                                    report("接口=${alternate.number}/${alternate.alternate} class=${alternate.deviceClass}/${alternate.subclass}/${alternate.protocol}；" +
+                                        alternate.pipes.joinToString { "ep=0x${DiagnosticReport.hex(it.address)} attr=${it.attributes} packet=${it.packetSize}" })
+                                }
+                            }
+                        }
+                    } } finally { connection.close() }
                 }
-            } catch (e: Exception) { report("诊断失败：${e.message}") }
-            finally { ui.post { busy = false } }
+            } catch (e: Exception) { report("USB 诊断失败：${e.javaClass.simpleName}: ${e.message}") }
+            catch (e: LinkageError) { report("USB 原生库不可用：${e.javaClass.simpleName}；确认使用 ARMv7 APK") }
+            try {
+                var decoders = 0
+                for (index in 0 until MediaCodecList.getCodecCount()) {
+                    if (cancelled.get()) break
+                    val codec = MediaCodecList.getCodecInfoAt(index)
+                    if (!codec.isEncoder && codec.supportedTypes.any { it.equals("video/avc", ignoreCase = true) }) {
+                        decoders++
+                        report("H.264 解码器：${codec.name}；profile/level=" + codec.getCapabilitiesForType("video/avc").profileLevels.joinToString { "${it.profile}/${it.level}" })
+                    }
+                }
+                if (decoders == 0 && !cancelled.get()) report("没有枚举到 H.264 解码器")
+            } catch (e: Exception) { report("解码器枚举失败：${e.message}") }
+            if (!cancelled.get()) report("设备诊断完成。点击 H.264 测试验证输出；日志可复制或分享。")
+        }
+    }
+    private fun probeDecoder() {
+        if (busy || desired) { report("请先断开并等待清理，再测试 H.264"); return }
+        val surface = view.holder.surface
+        if (!surface.isValid) { report("显示 Surface 尚未准备好，请稍后重试"); return }
+        diagnosticJob { DecoderProbe.run(this, surface, it, ::report) }
+    }
+    private fun diagnosticJob(body: (AtomicBoolean) -> Unit) {
+        val cancelled = AtomicBoolean(false)
+        diagnosticCancellation = cancelled; busy = true
+        Thread({
+            try { body(cancelled) }
+            catch (e: Exception) { report("诊断失败：${e.javaClass.simpleName}: ${e.message}") }
+            finally { ui.post {
+                if (diagnosticCancellation === cancelled) { diagnosticCancellation = null; busy = false }
+                if (!destroyed) saveReport()
+            } }
         }, "legacy-diagnostics").start()
+    }
+    private fun saveReport(): String? {
+        return try {
+            DiagnosticReport.text(this, log.snapshot()).also { DiagnosticReport.save(this, it) }
+        } catch (e: Exception) { report("诊断报告保存失败：${e.message}"); null }
+    }
+    private fun showLog() {
+        val text = saveReport() ?: return
+        val content = TextView(this).apply { this.text = text; setPadding(16, 16, 16, 16); setTextIsSelectable(true) }
+        AlertDialog.Builder(this).setTitle("诊断日志").setView(ScrollView(this).apply { addView(content) })
+            .setPositiveButton("关闭", null)
+            .setNeutralButton("复制") { _, _ ->
+                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("DiPlay 诊断", text))
+                report("诊断报告已复制")
+            }
+            .setNegativeButton("分享") { _, _ ->
+                val uri = DiagnosticReport.uri(this)
+                val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                intent.clipData = ClipData.newRawUri("DiPlay 诊断", uri)
+                try { startActivity(Intent.createChooser(intent, "分享诊断报告")) }
+                catch (_: ActivityNotFoundException) { report("未安装可接收日志的应用，请使用复制或 ADB 导出") }
+            }.show()
     }
     private fun report(message: String) {
         ui.post {
             if (destroyed) return@post
             val line = message.take(1000)
-            if (log.size >= 100) log.removeFirst()
-            log.addLast(line); status.text = line
+            log.add("[${SystemClock.elapsedRealtime()} ms] $line"); status.text = line
         }
     }
     override fun surfaceCreated(holder: SurfaceHolder) { sink.surface(holder.surface) }
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { sink.surface(holder.surface) }
-    override fun surfaceDestroyed(holder: SurfaceHolder) { sink.surface(null) }
+    override fun surfaceDestroyed(holder: SurfaceHolder) { diagnosticCancellation?.set(true); sink.surface(null) }
     override fun onStop() { disconnect(); super.onStop() }
     override fun onDestroy() {
         destroyed = true; disconnect(); sink.close(); touches.shutdownNow()

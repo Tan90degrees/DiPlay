@@ -15,7 +15,7 @@ JDK 17、Gradle 8.7、AGP 8.5.2、SDK 34、NDK 25.2.9519653；原工程仍使用
 - 直接 USB Host → iPhone，有线模式切换、系统 USB 授权、信任配对、iAP2 和 AirPlay。
 - H.264，向手机声明 **800×480 / 30 fps**，在屏幕中等比显示，双指触摸回传。
 - PCM 和 AAC 音频输出。协商时不声明 Opus、HEVC、麦克风或第二屏。
-- 断线、USB 模式切换和后台退出的资源清理；USB 配置及 H.264 解码器诊断。
+- 断线、USB 模式切换和后台退出的资源清理；独立设备诊断、H.264 实际解码测试和日志导出。
 - 不包含无线连接、Siri 麦克风、车机系统音频路由整合、HUD、视频播放扩展。
 
 ## 构建
@@ -60,18 +60,38 @@ DIPLAY_AUTH_ASSETS_DIR=/absolute/private/assets ./gradlew :app:assembleStandalon
 ## T3 车机第一次测试
 
 1. 安装源码测试 APK，先确认能打开界面。
-2. 将一台解锁的 iPhone 用数据线接到车机 **USB Host 数据口**，点击「USB 诊断」。
+2. **不插手机**也可先点「设备诊断」，查看 Android/API、CPU ABI、USB Host 和
+   H.264 解码器及 profile/level。再点「H.264 测试」，确认两段移动图案均正常显示。
+   测试分别使用 H.264 Baseline 和 High、Level 3.1、800×480、30 fps，每段 60 帧，
+   无音频，使用与有线后端相同的默认解码器选择和旧缓冲区数组接口。
+   日志记录实际解码器名称、输入/输出帧数和耗时；名称或成功输出帧数不能代替目视检查，
+   两秒片段也不能证明长时间播放、延迟或 iPhone 实际 profile/level 已满足要求。
+3. 将一台解锁的 iPhone 用数据线接到车机 **USB Host 数据口**，点击「设备诊断」。
    电源口或 USB Device 口无法替代 Host。不要同时连接多个 Apple 设备。
-3. 记录 Android/API、USB 配置及接口、是否发现 NCM，以及 H.264 解码器名称。
-   「日志」可以查看最近 100 条；截图前检查是否包含个人信息。
-4. 配置认证的版本中点击「连接」，同意系统 VPN 和 USB 授权。
+   授予 USB 权限后自动继续诊断，记录当前配置、MUX/NCM、接口、端点及 packet size。
+   USB 失败也会继续枚举解码器，诊断不切换配置或占用接口。
+4. 「日志」查看最近 100 条，可复制文本或分享 `wired-diagnostics.txt`。
+   每轮诊断后自动保存报告到应用私有目录，无需存储权限或文件选择器。
+   分享前检查日志是否包含个人信息；诊断不会读取认证文件或配对记录。
+5. 配置认证的版本中点击「连接」，同意系统 VPN 和 USB 授权。
    USB 模式切换后，系统可能再次请求授权；在 iPhone 上允许信任／CarPlay。
-5. 有画面后用「菜单」收起控制栏，检查颜色、比例、单击、拖动、双指与音乐输出。
-6. 拔线、重插、重复连接至少 5 次。退出应用后重新进入；检查旧会话是否清理。
+6. 有画面后用「菜单」收起控制栏，检查颜色、比例、单击、拖动、双指与音乐输出。
+7. 拔线、重插、重复连接至少 5 次。退出应用后重新进入；检查旧会话是否清理。
    更换手机或 iPhone 撤销信任后，先断开再点「重置配对」。
 
 应用仅在前台使用；切到后台会断开连接。第一轮不自动执行 root 命令或修改车机系统。
 已 root 不意味着 USB Host、VPN/TUN、IPv6 和硬件解码都可用。
+
+没有可接收分享的应用时，使用复制按钮，或在电脑上运行下列命令导出调试 APK 的报告：
+
+```sh
+adb shell run-as com.shihab.diplay.legacy cat files/wired-diagnostics.txt
+```
+
+报告只保留最近一次保存的内容，卸载会清除；连接失败后先打开「日志」刷新报告再导出。
+如需重新生成原始测试图案，用支持 libx264 的 FFmpeg 执行
+`python tools/generate_decoder_samples.py /path/to/ffmpeg`。片段为自行生成的测试图案，
+没有外部视频、个人信息或认证材料。
 
 ## 尚需设备验证的项目
 
@@ -92,6 +112,7 @@ DIPLAY_AUTH_ASSETS_DIR=/absolute/private/assets ./gradlew :app:assembleStandalon
 
 测试覆盖 USB 描述符截断与畸形输入、alternate 选择、NCM 分片/合并及短包填充、
 队列内存上限与关键帧恢复、PCM/AAC 的能力声明、原有 `/info` 回归、
-API 19 / 21 启动销毁、认证缺失时拒绝连接，以及私有身份持久化。
+API 19 / 21 启动销毁、认证缺失时拒绝连接、私有身份持久化、
+有界日志、报告读写及分享 provider 的私有路径隔离。
 Robolectric 使用 JVM 和 Android 模拟框架，不测试 native usbfs、真实 Dalvik、GPU 或 iPhone。
 最终装机记录才用于判断这台 T3 是否已经实现可用的有线 CarPlay。

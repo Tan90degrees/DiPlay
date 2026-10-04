@@ -18,5 +18,7 @@
         </activity>
         <service android:name=".WiredVpnService" android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false" />
+        <provider android:name=".DiagnosticProvider" android:authorities="${applicationId}.diagnostics"
+            android:exported="false" android:grantUriPermissions="true" />
     </application>
 </manifest>
