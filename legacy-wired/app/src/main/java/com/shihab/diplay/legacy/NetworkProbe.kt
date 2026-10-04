@@ -69,7 +69,7 @@ internal object NetworkProbe {
                 checkCompatibility()
                 try { socket.send(DatagramPacket(payload, payload.size, scopedPeer, 47019)) }
                 catch (e: SocketException) {
-                    if (e.message?.contains("EPERM") == true) report("IPv6 sendto 被系统拒绝；KitKat VPN 的 IPv6 REJECT 是候选原因。可在网络兼容中主动启用 Root 自测；TUN 读写尚未验证")
+                    if (e.message?.contains("EPERM") == true) report("IPv6 sendto 被系统拒绝；TUN 读写尚未验证，请导出网络环境日志")
                     throw e
                 }
                 val deadline = SystemClock.elapsedRealtime() + 3000

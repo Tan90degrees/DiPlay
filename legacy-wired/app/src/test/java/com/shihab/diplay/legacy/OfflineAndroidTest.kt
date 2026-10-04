@@ -78,28 +78,12 @@ class OfflineAndroidTest {
         fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
         try {
             val views = descendants(activity.get().window.decorView)
-            assertFalse(NetworkCompatibilitySettings.enabled(context))
-            if (Build.VERSION.SDK_INT < 21) {
-                views.filterIsInstance<Button>().first { it.text == "网络兼容" }.performClick()
-                val settings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-                assertFalse(NetworkCompatibilitySettings.enabled(context))
-                settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
-                assertTrue(NetworkCompatibilitySettings.enabled(context))
-                NetworkCompatibilitySettings.enable(context, false)
-                views.filterIsInstance<Button>().first { it.text == "网络兼容" }.performClick()
-                val networkSettings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-                networkSettings.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
-                assertFalse(NetworkCompatibilitySettings.adbEnabled(context))
-                val confirmation = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-                assertNotSame(networkSettings, confirmation)
-                confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
-                assertTrue(NetworkCompatibilitySettings.adbEnabled(context))
-                assertFalse(NetworkCompatibilitySettings.enabled(context))
-                NetworkCompatibilitySettings.enable(context, false)
-            }
+            assertFalse(views.filterIsInstance<Button>().any { it.text.toString().contains("Root") || it.text.toString().contains("ADB") })
+            views.filterIsInstance<Button>().first { it.text == "网络说明" }.performClick()
+            val settings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+            assertTrue(settings.getButton(AlertDialog.BUTTON_NEUTRAL)?.visibility != View.VISIBLE)
+            settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
             views.filterIsInstance<Button>().first { it.text == "USB 接口自测" }.performClick()
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             views.filterIsInstance<Button>().first { it.text == "离线自测" }.performClick()

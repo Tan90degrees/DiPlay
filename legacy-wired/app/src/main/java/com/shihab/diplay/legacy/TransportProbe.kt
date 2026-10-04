@@ -35,6 +35,19 @@ internal object TransportProbe {
             }
             report("协议离线自测：USB packet=$packetSize，各分片位置重组与回包转换通过")
         }
-        report("协议离线自测通过：$cases 个转换场景；USB bulk、真实认证和 CarPlay 仍需实测")
+        if (cancelled.get()) { report("协议离线自测已取消"); return }
+        val translated = RootlessTranslator()
+        val body = "DiPlay-rootless-conversion".toByteArray()
+        val source4 = RootlessIp.host4; val destination4 = RootlessIp.peer4
+        val udp = ByteArray(8) + body
+        RootlessIp.put16(udp, 0, 47018); RootlessIp.put16(udp, 2, 47019); RootlessIp.put16(udp, 4, udp.size)
+        RootlessIp.repairTransport(source4, destination4, 17, udp)
+        val virtual = RootlessIp.ipv4(source4, destination4, 17, udp)
+        val ipv6 = translated.toIpv6(virtual).single()
+        val response = checkNotNull(ProbeUdpPacket.reply(ipv6, RootlessIp.host6, RootlessIp.peer6, 47019, body))
+        val ipv4 = checkNotNull(translated.toIpv4(response))
+        check(ipv4.copyOfRange(28, ipv4.size).contentEquals(body)) { "免 Root 转换回包不匹配" }
+        report("协议离线自测：免 Root IPv4↔IPv6 UDP 转换与校验通过")
+        report("协议离线自测通过：$cases 个 NCM 场景及免 Root 转换；USB bulk、真实认证和 CarPlay 仍需实测")
     }
 }

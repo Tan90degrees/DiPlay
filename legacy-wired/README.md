@@ -2,7 +2,7 @@
 
 这个独立 Gradle 工程面向 Android **4.4.2 / API 19、ARMv7** 老车机，首个目标设备为
 Allwinner T3、四核 Cortex-A7、1 GB RAM、1024×600 屏幕。最低版本为 API 19，
-也在 API 21 的模拟框架中检查启动。**T3 真机已验证短片解码和 iPhone USB 枚举，完整连接尚未验证**。
+也在 API 21 的模拟框架中检查启动。**T3 真机已验证解码、音频和 USB 接口操作；0.1.7 免 Root 网络与完整连接尚未验证**。
 构建、API lint 或启动测试通过，不等于硬件 USB、认证或解码已成功。
 
 应用标识为 `com.shihab.diplay.legacy`，可以与现有 DiPlay 并存。此工程单独使用
@@ -109,8 +109,9 @@ CI 使用临时调试签名，不同构建的签名可能不同。更新安装�
 | 网络 TUN / IPv6 | 同意系统 VPN 授权，临时建立与有线路径相同的 fe80::2/64 TUN；读取 5 个本机 UDP 测试包并注入带校验和的 IPv6 回包，结束后关闭 TUN | 授权、TUN fd 的 native poll/read/write、接口作用域、IPv6 UDP 内核回包；不经过 USB/NCM 或 iPhone |
 
 音频测试前把车机音量调到适中。网络自测可能替换正在使用的其他 VPN，测试前结束其他 VPN；
-只添加链路本地 IPv6 路由，不配置默认路由或 DNS。停止后日志应出现「网络自测 TUN 已关闭」。
-普通模式自测无需认证资产，不执行 root 命令。0.1.4 的 Root 兼容须另行主动启用，详见下文。
+Android 4.4 添加应用内部使用的 198.18.0.0/24 IPv4 路由，Android 5 使用链路本地 IPv6 路由；
+不配置默认路由或 DNS。停止后日志应出现「网络自测 TUN 已关闭」。
+网络自测无需认证资产、Root 或电脑；0.1.7 已移除旧版 Root/ADB 辅助。
 
 ## T3 真机记录（2026-10-04，0.1.1）
 
@@ -135,27 +136,14 @@ PCM / AAC 写入 352800 / 360448 字节，用户确认左右声道及 AAC 均能
 
 ## 尚需设备验证的项目
 
-### KitKat IPv6 / Root 兼容（0.1.4）
+### KitKat IPv6 发送失败（历史记录）
 
-0.1.2 真机报告中，TUN 已建立为 `tun0`，但第一包 UDP `sendto` 返回 `EPERM`。
-Android 4.4.2 的 [SecondaryTableController 源码](https://android.googlesource.com/platform/system/netd/+/android-4.4.2_r2/SecondaryTableController.cpp)
-在 IPv6 NAT 设置失败时为 VPN 标记添加 IPv6 REJECT；这是候选原因，需要 ROM 实测确认。
-创建 TUN 成功不能证明其出站流量可用；本机链路本地 CarPlay 不需要 NAT 到互联网。
-
-普通网络自测增加内核、INTERNET 权限、接口 IPv6 开关、路由条目数、作用域和失败阶段的只读日志。
-TUN 名称由授权 fd 的 `TUNGETIFF` 读取，避免与其他接口上的同名 IPv6 地址混淆。
-
-Android 4.4 上可点击「网络兼容」主动启用实验性 Root IPv6 模式，再运行网络自测并允许 `su`。
-该设置默认关闭，保存在应用私有设置中，同时用于后续有线连接。
-仅在 `st_filter_OUTPUT` 存在 REJECT 时，插入匹配本应用 UID、当前 `tunN`、
-源 `fe80::2/128`、目的 `fe80::/64` 的 RETURN 规则；使用唯一注释标识，保留其他规则。
-不改系统文件、默认路由或 DNS，不清空防火墙，不请求 socket 绕开 TUN。
-
-Root shell 持有临时规则，停止后或应用管道 EOF 时按完整参数删除；不是永久系统补丁。
-若 ROM 不支持 `su`、owner/comment 模块或该链，记录失败；不会改用宽泛规则。
-SU 实现与强制结束行为仍需实测，不能保证所有 Root 管理器都正确传递管道 EOF。
-无法确认清理时停止测试并重启车机。正常成功日志应包含 5/5 回包、
-「Root IPv6：临时规则已删除」和「网络自测 TUN 已关闭」。可在同一菜单恢复普通模式。
+0.1.2–0.1.5 真机建立了 IPv6 TUN，UDP bind 成功但 sendto 返回 EPERM。
+[KitKat netd](https://android.googlesource.com/platform/system/netd/+/android-4.4.2_r2/SecondaryTableController.cpp)
+在 IPv6 NAT 不可用时可能为 VPN UID 设置 REJECT，仍未确认这台厂商 ROM 的具体规则。
+0.1.4–0.1.6 曾提供主动启用的临时 Root 规则与电脑辅助，但车机 su 明确拒绝应用 UID，
+使用过程也不便。0.1.7 按用户选择改用应用内 IPv4/IPv6 转换，并移除这些代码、菜单和工具。
+新版本不读取旧 Root 模式偏好，不执行 su 或防火墙命令。
 
 ### USB 接口自测（0.1.3）
 
@@ -198,11 +186,7 @@ INTERNET 权限正常。启用 Root 后 su 约 70 ms 退出，未建立规则；
 [AOSP 的部分旧式 su](https://android.googlesource.com/platform/system/extras/+/906d825/su/su.c)
 仅允许 root/shell 调用，所以 ADB 可执行 su 不代表普通应用也能获得 Root。
 
-安装 0.1.5 后重新插拔 iPhone，再运行 USB 接口自测；预期分别出现 MUX、NCM 控制、
-NCM 数据的占用与读回，以及清理通过。普通网络的已知 EPERM 无需反复测试；主动启用
-Root 模式后运行网络自测，提供 Root UID 检查和后续规则/回包/清理日志。
-若显示应用 UID 不允许调用，需支持应用授权的 Root 管理器；参数兼容不能改变该权限限制。
-源码 APK 的缺少认证身份提示仍符合预期。
+上述是 0.1.5 的实现记录；当前按以下 0.1.7 免 Root 步骤验证。源码 APK 的缺少认证身份提示仍符合预期。
 
 0.1.5 后续真机报告：连续两次完整通过配置 1→5、MUX 1/0、NCM 控制 2/0、
 NCM 数据 3/1、释放接口和恢复配置 1，最终状态读回也通过。USB 接口操作与清理现已得到
@@ -230,58 +214,48 @@ CI 同时运行原有 USBMUX 分片、iAP2、NTB 与 NDP 回归检查，以及 A
 合成 USBMUX peer 验证真实 host/TCP 实现的握手、大数据拆分、读回和取消。
 该 peer 只存在于测试源码，生产 APK 不含可选假手机或假认证后端。
 
-### ADB 临时 IPv6 辅助（0.1.6 调试版）
+### 0.1.7：应用内免 Root 网络转换
 
-0.1.5 的车机日志已证明 su 拒绝应用 UID，不能通过重复参数重试解决。
-优先使用能对应用明确授权的 Root 管理器；若仅 ADB shell 可用 Root，可由设备所有者在
-电脑启动临时辅助。电脑必须通过 USB 或已授权的无线 ADB 连到车机；
-同一 USB 端口无法同时连接电脑和 iPhone 时，可先用电脑连接车机运行本机网络自测。
-电脑连接 iPhone 或 Android 模拟器不能验证车机的 USB/VPN。
+安装 APK，点击“离线自测”→“网络自测（免 Root）”，接受 Android 标准 VPN 授权即可；
+不需要电脑辅助、su 授权或额外网络模式配置。先检查 IPv4 UDP bind、UDP 5/5 回包、
+TCP 握手与应用 Socket 双向收发，最后确认 TUN 已关闭。失败时导出完整日志。
+旧版保存的 Root/ADB 设置不会生效；Root 执行代码、菜单及辅助脚本已从当前源码移除。
 
-在 PowerShell 7 中运行（adb 已加入 PATH）：
+Android 4.4 的系统 Socket/TUN 使用 198.18.0.2/24，iPhone USB 链路仍看到 fe80::2。
+应用将两侧 IP 头、TCP/UDP/ICMP 校验和进行转换，保留端口、TCP 序号与应用有效载荷。
+对手机链路本地地址建立每次连接独立、最多 16 项的映射，不转发普通局域网或 Internet。
+AirPlay 控制、音频、时钟、保活、事件、视频及数据通道使用相同本地地址族；
+其他 DiPlay 后端的默认绑定方式不变。Android 5 仍使用原生 IPv6。
 
-~~~powershell
-pwsh -File .\legacy-wired\tools\Start-LegacyIpv6Helper.ps1 -Serial 车机ADB序列号
-~~~
+转换规则参考 [RFC 7915](https://www.rfc-editor.org/rfc/rfc7915.html)，邻居发现参考
+[RFC 4861](https://www.rfc-editor.org/rfc/rfc4861.html)。这是固定 USB 端点转换器，不是完整的
+通用 SIIT/NAT64 路由器：支持 TCP/UDP、ICMP echo 以及部分不可达/超时/MTU 错误，
+IPv4 无选项报头、IPv6 基础与 Fragment 报头；其他扩展、路由报头和组播数据不猜测转换。
+应用自行响应 fe80::2 的 NS/DAD，校验跳数、目标、选项和 ICMP 校验和，地址冲突会中止连接。
 
-只有一个设备时可省略 -Serial；可用 -AdbPath 指定 adb.exe。
-脚本先检查 API 19、调试 APK 的 run-as/实际 UID 和 shell 的真实 Root 权限，
-然后把固定辅助脚本写入应用私有 files 目录并前台运行。
-车机需要允许 shell 使用 su 和 run-as；厂商禁用这些能力时会停止并报告原因。
-Android 的 [run-as 实现](https://github.com/aosp-mirror/platform_system_core/blob/android-4.4.2_r2/run-as/run-as.c)
-只接受 root/shell 调用且要求目标包可调试，因此正式 APK 不支持本工具。
+IPv4 TUN MTU=1260、USB IPv6 MTU=1280，为转换后的报头预留 20 字节。
+IPv4/IPv6 分片重组最多 8 组、合计 256 KiB、每组最多 128 片、5 秒过期；
+重叠分片丢弃整个数据报，UDP 超过 MTU 时在 USB 侧输出 IPv6 分片。
+重组后的 IPv4 数据报最多 65535 字节，TUN 写入使用有界原生堆缓冲；
+USB 原生单次传输上限仍为 16 KiB。
 
-保持终端和 ADB 连接，在应用点“网络兼容”→“ADB 临时辅助”→“启用 ADB 辅助”，
-再运行网络自测。预期看到临时规则就绪、五轮 IPv6/UDP 回包和“临时规则已删除”。
-结束辅助按 Ctrl+C。默认最多 30 分钟，-MaxMinutes 可设 1–240 分钟。
-应用模式会保存，但每次测试/连接都必须有正在运行的电脑辅助。
-
-IPC 在应用私有目录，使用随机租约标签、实际应用 UID 和 8 秒心跳；
-应用退出、请求超时、ADB 标准输入断开或辅助到期都删除该租约的完整规则。
-只修改 st_filter_OUTPUT 中当前 UID/TUN/fe80::2→fe80::/64 的临时 RETURN 条目，
-不修改 su 授权、不写系统分区、不清空规则、不更改默认策略。
-删除失败会明确报告；无法确认时停止使用并重启车机。
-若辅助上次被强制杀死且报告 STALE_LOCK，先重启车机，确认无旧进程后运行：
-~~~text
-adb shell run-as com.shihab.diplay.legacy rmdir files/adb-root-helper-lock
-~~~
-这只删除空的辅助锁目录。规则存在性由本次电脑/应用日志共同确认。
-辅助测试使用伪 ip6tables/run-as，覆盖正常释放、EOF、心跳/硬超时、失败及畸形请求；
-尚未证明本车机允许 shell Root，或临时例外可以消除当前 EPERM。
-完整 CarPlay 仍需要可用认证身份、真实 USB bulk/NCM 与 iPhone 会话验证。
+自测中的 IPv6 peer 是本机测试数据：UDP/TCP 使用真实 Android Socket 与授权 TUN fd，
+IPv6 回包由应用生成再转换回 IPv4，不打开 iPhone USB，不进行认证。
+它能验证这台 ROM 的免 Root IPv4 通路，不能替代实际 NCM、认证与完整 CarPlay 会话。
+0.1.7 尚需 T3 实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
 
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |
 | 旧内核传输 | 每次最多 16 KiB，IO 使用原生缓冲区，避免在阻塞期间固定 Java 数组；需要检查 T3 内核/SELinux 是否允许相关 ioctl |
-| NCM 网络 | NTB16 有界分片重组；非阻塞 TUN 用 poll；IPv6 链路本地服务使用接口作用域；需检查厂商 ROM 的 VPN/IPv6 支持 |
+| NCM 网络 | NTB16 有界分片重组；TUN 用 poll；API 19 使用 IPv4/IPv6 端点转换，API 21 使用作用域 IPv6；需实机检查 VPN 支持 |
 | 超时 | 启动前的 NCM NAK 超时丢弃该数据报；CarPlay 启动后超时终止连接，不重发可能部分发送的块 |
 | 解码 | API 16 的 MediaCodec 缓冲区数组；Surface 变化重建解码器；队列溢出等待关键帧；需确认厂商解码器实际输出 |
 | 音频 | API 19 AudioTrack 构造器和缓冲区写入；PCM 字节序转换、AAC ADTS；车机 DSP/通话/媒体路由未验证 |
 | Android 5 | 同一 APK 的目标；API 21 启动检查通过，但连接和影音仍需实机验证 |
 
-如果 ROM 的 VPN/TUN 或 IPv6 被裁掉，当前网络方案不能连接。设备已经 root，
-后续可根据诊断结果单独评估原生 TUN/路由配置；首版不会在未知 ROM 上自动修改系统。
+若 ROM 裁掉或拒绝 VPN/TUN，当前方案不能连接；免 Root 转换仍依赖 Android 的标准 VPN 能力。
+应用不修改系统网络规则。认证身份仍由用户自行提供，不能用网络转换代替认证。
 
 ## 自动验证
 

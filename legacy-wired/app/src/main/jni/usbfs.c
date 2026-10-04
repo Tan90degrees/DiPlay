@@ -7,6 +7,7 @@
 #include <linux/if_tun.h>
 #include <poll.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -135,11 +136,14 @@ JNIEXPORT jint JNICALL JNI_METHOD(tunWrite)(JNIEnv *env, jobject self, jint fd, 
     struct pollfd poll_fd = { .fd = fd, .events = POLLOUT };
     int ready = poll(&poll_fd, 1, 250);
     if (ready <= 0) return ready == 0 ? -ETIMEDOUT : -errno;
-    unsigned char bytes[16384];
     jsize length = (*env)->GetArrayLength(env, data);
-    if (length > 16384) return -EINVAL;
+    if (length < 1 || length > 65535) return -EINVAL;
+    unsigned char *bytes = malloc((size_t)length);
+    if (bytes == NULL) return -ENOMEM;
     (*env)->GetByteArrayRegion(env, data, 0, length, (jbyte *)bytes);
+    if ((*env)->ExceptionCheck(env)) { free(bytes); return -EINVAL; }
     int result = write(fd, bytes, length);
     int saved_errno = errno;
+    free(bytes);
     return result < 0 ? -saved_errno : result;
 }

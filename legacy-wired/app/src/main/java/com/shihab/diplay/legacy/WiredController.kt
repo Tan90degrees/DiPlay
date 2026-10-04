@@ -93,9 +93,9 @@ class WiredController(
         check(ncmUsb.currentAlternate(function.data.number) == function.data.alternate) { "NCM 数据备用接口读回不匹配" }
         val ncm = own(LegacyNcm(ncmUsb, function.data))
         own(vpn.connect(ncm, hostMac, closed, status) { error -> status("USB 网络失败：${error.message}"); close() })
-        val rawAddress = InetAddress.getByName("fe80::2")
+        val rawAddress = vpn.localAddress()
         val tunInterface = vpn.activeInterface()
-        val scopedAddress = Inet6Address.getByAddress(null, rawAddress.address, tunInterface)
+        val scopedAddress = if (rawAddress is Inet6Address) Inet6Address.getByAddress(null, rawAddress.address, tunInterface) else rawAddress
         val server = own(ServerSocket()).apply {
             reuseAddress = true
             bind(InetSocketAddress(scopedAddress, 7000))
@@ -104,14 +104,15 @@ class WiredController(
         status("AirPlay 已监听当前 USB 网络；等待 iAP2 启动通知")
         val configAirPlay = AirPlayConfig("DiPlay Wired", macText, macText, "950.7.1",
             AirPlayDisplayConfig(800, 480, fps = 30), hevc = false, microphone = false,
-            manufacturer = "DiPlay", model = "LegacyWired", oemLabel = "DiPlay", opus = false)
+            manufacturer = "DiPlay", model = "LegacyWired", oemLabel = "DiPlay", opus = false,
+            bindTransportToControlAddress = true)
         val pairs = identityStore.pairings()
         val acceptThread = Thread({
             try {
                 while (!closed.get()) {
                     val socket = try { server.accept() } catch (_: SocketTimeoutException) { continue }
                     // A wired receiver accepts only the link-local peer on its bound TUN address.
-                    if (!socket.inetAddress.isLinkLocalAddress) { socket.close(); continue }
+                    if (!vpn.acceptsPeer(socket.inetAddress)) { socket.close(); continue }
                     own(socket)
                     active?.close()
                     val mediaLease = own(mediaSessions.open())

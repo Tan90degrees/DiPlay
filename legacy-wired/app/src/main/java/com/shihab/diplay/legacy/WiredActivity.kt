@@ -120,7 +120,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         button("USB 接口自测") { probeUsbInterfaces() }
         button("H.264 测试") { probeDecoder() }
         button("离线自测") { showSelfTests() }
-        button("网络兼容") { showNetworkCompatibility() }
+        button("网络说明") { showNetworkCompatibility() }
         button("日志") { showLog() }
         button("重置配对") {
             if (busy) { report("请先断开，等待连接清理完成"); return@button }
@@ -271,7 +271,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         }
     }
     private fun showSelfTests() {
-        val entries = arrayOf("视频持续 60 秒", "音频 PCM / AAC", if (touchTesting) "结束触控测试" else "触控单击 / 拖动 / 双指", "网络 TUN / IPv6", "协议离线自测")
+        val entries = arrayOf("视频持续 60 秒", "音频 PCM / AAC", if (touchTesting) "结束触控测试" else "触控单击 / 拖动 / 双指", "网络自测（免 Root）", "协议离线自测")
         AlertDialog.Builder(this).setTitle("无需 iPhone 的自测").setItems(entries) { _, index ->
             when (index) {
                 0 -> probeDecoder(rounds = 15)
@@ -310,24 +310,9 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     }
     private fun showNetworkCompatibility() {
         if (!readyForProbe()) return
-        if (Build.VERSION.SDK_INT >= 21) { report("Root IPv6 兼容仅用于 Android 4.4；当前使用普通网络模式"); return }
-        val enabled = NetworkCompatibilitySettings.anyEnabled(this)
-        val mode = if (NetworkCompatibilitySettings.adbEnabled(this)) "ADB 临时辅助" else if (enabled) "Root 兼容" else "普通模式"
-        AlertDialog.Builder(this).setTitle("Android 4.4 IPv6 兼容")
-            .setMessage("当前：$mode。\n\nRoot 兼容会请求本应用的 su 授权，仅为本应用、当前 TUN、fe80::/64 添加临时例外；停止时删除。若车机只允许 ADB shell 使用 Root，可使用电脑临时辅助。实际回包仍需自测验证。")
-            .setPositiveButton(if (enabled) "恢复普通模式" else "启用 Root 兼容") { _, _ ->
-                NetworkCompatibilitySettings.enable(this, !enabled)
-                report("网络模式已设为${if (enabled) "普通模式" else "Root IPv6 兼容"}；请重新运行网络自测，确认回包与临时规则删除")
-                saveReport()
-            }.setNeutralButton("ADB 临时辅助") { _, _ ->
-                AlertDialog.Builder(this).setTitle("电脑临时网络辅助")
-                    .setMessage("先在电脑运行仓库 tools/Start-LegacyIpv6Helper.ps1，并保持 ADB 连接。电脑辅助需要车机允许 shell 使用 Root；仅支持调试 APK。启用后再运行网络自测。停止或租约超时会删除临时规则；电脑断开时连接会失效。")
-                    .setPositiveButton("启用 ADB 辅助") { _, _ ->
-                        NetworkCompatibilitySettings.enableAdb(this)
-                        report("网络模式已设为 ADB 临时辅助；请保持电脑辅助进程，再运行网络自测")
-                        saveReport()
-                    }.setNegativeButton("取消", null).show()
-            }.setNegativeButton("取消", null).show()
+        AlertDialog.Builder(this).setTitle("免 Root 有线网络")
+            .setMessage("连接和网络自测只需要 Android 系统 VPN 授权。\n\nAndroid 4.4 默认使用应用内网络转换。直接在本机运行网络自测，无需电脑辅助。请确认 UDP 5/5 和 TCP 双向回包；完整 CarPlay 仍需认证及手机连接验证。")
+            .setPositiveButton("关闭", null).show()
     }
     private fun diagnosticJob(body: (AtomicBoolean) -> Unit) {
         val cancelled = AtomicBoolean(false)

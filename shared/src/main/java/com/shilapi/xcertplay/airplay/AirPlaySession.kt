@@ -97,6 +97,7 @@ class AirPlaySession(
 
     val host: String = socket.inetAddress?.hostAddress ?: ""
     val localAddress: InetAddress? = socket.localAddress
+    internal val transportBindAddress: InetAddress? get() = localAddress.takeIf { config.bindTransportToControlAddress }
     private val peerAddress: InetAddress? = socket.inetAddress
     internal val remoteAddress: InetAddress?
         get() = (socket.remoteSocketAddress as? InetSocketAddress)?.address
@@ -747,7 +748,7 @@ class AirPlaySession(
     }
 
     private fun openTiming(peerPort: Int): Int {
-        val port = ntp.listen()
+        val port = ntp.listen(transportBindAddress)
         if (peerPort > 0) peerAddress?.let { ntp.start(it, peerPort) }
         return port
     }
@@ -755,7 +756,7 @@ class AirPlaySession(
     private fun openKeepAlive(): Int {
         val socket = DatagramSocket(null)
         socket.reuseAddress = true
-        socket.bind(InetSocketAddress(InetAddress.getByName("::"), 0))
+        socket.bind(InetSocketAddress(transportBindAddress ?: InetAddress.getByName("::"), 0))
         keepAliveSocket = socket
         keepAliveThread = Thread({ runKeepAlive(socket) }, "airplay-keepalive").apply {
             isDaemon = true
@@ -776,7 +777,7 @@ class AirPlaySession(
     }
 
     private fun openEvent(): Int {
-        val server = ServerSocket(0, 50, InetAddress.getByName("::"))
+        val server = ServerSocket(0, 50, transportBindAddress ?: InetAddress.getByName("::"))
         eventServer = server
         spawnEvent("airplay-event-accept") { acceptEvent(server) }
         return server.localPort
