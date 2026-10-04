@@ -165,6 +165,16 @@ class RootlessTranslatorTest {
         assertNull(mapper.toIpv4(fragments[0])); assertNull(mapper.toIpv4(fragments[0]))
         assertTrue(fragments.drop(1).all { mapper.toIpv4(it) == null })
     }
+    @Test fun largeUdpExercisesTheSameFragmenterAndReassemblerAsTheOnDeviceProbe() {
+        val packet = IpFixture.udp(RootlessIp.peer6, RootlessIp.host6, ByteArray(32769) { it.toByte() }, 6)
+        val frames = RootlessIp.fragment6(packet, 42)
+        assertTrue(frames.all { it.size <= 1280 })
+        val mapper = RootlessTranslator()
+        val output = frames.mapNotNull(mapper::toIpv4).single()
+        assertEquals(32797, output.size)
+        assertEquals(0, IpFixture.verifyTransport(output))
+        assertArrayEquals(packet.copyOfRange(48, packet.size), output.copyOfRange(28, output.size))
+    }
     @Test fun icmpEchoMapsBothFamiliesAndRepairsChecksums() {
         val payload = ByteArray(13).apply { this[0] = 128.toByte(); this[5] = 7; this[12] = 42 }
         val packet = RootlessTranslator().toIpv4(IpFixture.icmp6(payload))!!

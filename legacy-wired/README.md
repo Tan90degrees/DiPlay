@@ -106,7 +106,7 @@ CI 使用临时调试签名，不同构建的签名可能不同。更新安装�
 | 视频持续 60 秒 | Baseline、High 各 30 秒，复用同一解码器连续送入循环片段；每种预期输入/输出 900 帧，记录 native 内存前后值 | 解码与显示的短时持续运行；内存值不包含全部 GPU/解码器占用，不证明长期稳定或真实 CarPlay 延迟 |
 | 音频 PCM / AAC | 44100 Hz 立体声；先左声道 440 Hz、右声道 660 Hz，再双声道 AAC 550 Hz；使用较低测试电平，记录 AudioTrack 写入字节 | 复用有线版的 PCM 字节序转换、AAC/ADTS 解码与旧 AudioTrack 后端；写入成功还需听音确认 |
 | 触控单击 / 拖动 / 双指 | 网格、触点 ID、归一化坐标和 DOWN/UP 状态；结束时记录事件、最大触点与抬起数 | 与连接共用坐标转换；不验证手机端实际接收或响应 |
-| 网络 TUN / IPv6 | 同意系统 VPN 授权，临时建立与有线路径相同的 fe80::2/64 TUN；读取 5 个本机 UDP 测试包并注入带校验和的 IPv6 回包，结束后关闭 TUN | 授权、TUN fd 的 native poll/read/write、接口作用域、IPv6 UDP 内核回包；不经过 USB/NCM 或 iPhone |
+| 网络自测（免 Root） | 同意系统 VPN 授权；API 19 使用 IPv4 TUN 和应用内 IPv6 转换，API 21 使用原生 IPv6；测试后关闭 TUN | API 19 检查 UDP 5/5、分片/大包转换和 TCP 双向收发；不经过 USB/NCM 或 iPhone |
 
 音频测试前把车机音量调到适中。网络自测可能替换正在使用的其他 VPN，测试前结束其他 VPN；
 Android 4.4 添加应用内部使用的 198.18.0.0/24 IPv4 路由，Android 5 使用链路本地 IPv6 路由；
@@ -218,7 +218,8 @@ CI 同时运行原有 USBMUX 分片、iAP2、NTB 与 NDP 回归检查，以及 A
 
 安装 APK，点击“离线自测”→“网络自测（免 Root）”，接受 Android 标准 VPN 授权即可；
 不需要电脑辅助、su 授权或额外网络模式配置。先检查 IPv4 UDP bind、UDP 5/5 回包、
-TCP 握手与应用 Socket 双向收发，最后确认 TUN 已关闭。失败时导出完整日志。
+TCP 握手与应用 Socket 双向收发，最后确认 TUN 已关闭。五次 UDP 负载为
+17、64、1232、4097、32769 字节，同时检查 MTU 边界、分片和大包 TUN 写入。失败时导出完整日志。
 旧版保存的 Root/ADB 设置不会生效；Root 执行代码、菜单及辅助脚本已从当前源码移除。
 
 Android 4.4 的系统 Socket/TUN 使用 198.18.0.2/24，iPhone USB 链路仍看到 fe80::2。

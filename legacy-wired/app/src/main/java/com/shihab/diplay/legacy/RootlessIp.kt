@@ -59,6 +59,20 @@ internal object RootlessIp {
         val checksum = checksum6(source, destination, protocol, payload)
         put16(payload, offset, if (protocol == 17 && checksum == 0) 65535 else checksum)
     }
+    fun fragment6(packet: ByteArray, id: Int): List<ByteArray> {
+        if (packet.size <= MTU6) return listOf(packet)
+        val body = packet.copyOfRange(40, packet.size)
+        return (body.indices step 1232).map { offset ->
+            val size = minOf(1232, body.size - offset)
+            val fragment = ByteArray(8 + size)
+            fragment[0] = packet[6]
+            put16(fragment, 2, offset or if (offset + size < body.size) 1 else 0)
+            for (i in 0..3) fragment[4 + i] = (id ushr (24 - 8 * i)).toByte()
+            body.copyInto(fragment, 8, offset, offset + size)
+            ipv6(packet.copyOfRange(8, 24), packet.copyOfRange(24, 40), 44, fragment,
+                packet[7].toInt() and 255, ((packet[0].toInt() and 15) shl 4) or ((packet[1].toInt() and 255) ushr 4))
+        }
+    }
 }
 
 /** Bounds both protocol fragment families together, rejects any overlap and expires incomplete groups. */

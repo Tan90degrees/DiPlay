@@ -87,17 +87,7 @@ internal class RootlessTranslator(clock: () -> Long = { System.nanoTime() / 1_00
             bytes[8].toInt() and 255, bytes[1].toInt() and 255)
         if (packet.size <= RootlessIp.MTU6) return listOf(packet)
         if (resultProtocol !in listOf(6, 17)) return emptyList()
-        val id = ++fragmentId
-        return (result.indices step 1232).map { offset ->
-            val size = minOf(1232, result.size - offset)
-            val fragment = ByteArray(8 + size)
-            fragment[0] = resultProtocol.toByte()
-            RootlessIp.put16(fragment, 2, offset or if (offset + size < result.size) 1 else 0)
-            for (i in 0..3) fragment[4 + i] = (id ushr (24 - 8 * i)).toByte()
-            result.copyInto(fragment, 8, offset, offset + size)
-            RootlessIp.ipv6(RootlessIp.host6, destination6, 44, fragment,
-                bytes[8].toInt() and 255, bytes[1].toInt() and 255)
-        }
+        return RootlessIp.fragment6(packet, ++fragmentId)
     }
     private fun icmp6to4(payload: ByteArray): ByteArray? {
         val type = payload[0].toInt() and 255; val code = payload[1].toInt() and 255
