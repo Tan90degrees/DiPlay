@@ -15,9 +15,18 @@ internal object NetworkCompatibilitySettings {
         context.getSharedPreferences("network-compatibility", Context.MODE_PRIVATE).getBoolean("root-ipv6", false)
     fun enable(context: Context, value: Boolean) {
         check(context.getSharedPreferences("network-compatibility", Context.MODE_PRIVATE).edit()
-            .putBoolean("root-ipv6", value).commit()) { "无法保存网络兼容设置" }
+            .putBoolean("root-ipv6", value).putBoolean("adb-root-ipv6", false).commit()) { "无法保存网络兼容设置" }
     }
+    fun adbEnabled(context: Context) = Build.VERSION.SDK_INT < 21 &&
+        context.getSharedPreferences("network-compatibility", Context.MODE_PRIVATE).getBoolean("adb-root-ipv6", false)
+    fun enableAdb(context: Context) {
+        check(context.getSharedPreferences("network-compatibility", Context.MODE_PRIVATE).edit()
+            .putBoolean("root-ipv6", false).putBoolean("adb-root-ipv6", true).commit()) { "无法保存网络兼容设置" }
+    }
+    fun anyEnabled(context: Context) = enabled(context) || adbEnabled(context)
 }
+
+internal interface RootLease : Closeable { fun checkActive() }
 
 /** A root shell holds one narrow rule. EOF from the app removes it, including after app death. */
 internal object RootIpv6Compatibility {
@@ -61,8 +70,9 @@ internal object RootIpv6Compatibility {
         """.trimIndent()
     }
 
-    fun open(iface: String, cancelled: AtomicBoolean, report: (String) -> Unit): RootRuleLease {
+    fun open(context: Context, iface: String, cancelled: AtomicBoolean, report: (String) -> Unit): RootLease {
         check(Build.VERSION.SDK_INT < 21) { "Root IPv6 兼容仅面向 Android 4.4" }
+        if (NetworkCompatibilitySettings.adbEnabled(context)) return AdbRootIpv6Lease.open(context, iface, cancelled, report)
         check(!cancelled.get()) { "Root 网络设置已取消" }
         val tag = "diplay_" + UUID.randomUUID().toString().replace("-", "")
         val invocation = SuAccess.select(cancelled, report)
@@ -81,7 +91,7 @@ internal object RootIpv6Compatibility {
     }
 }
 
-internal class RootRuleLease(private val process: java.lang.Process, private val report: (String) -> Unit) : Closeable {
+internal class RootRuleLease(private val process: java.lang.Process, private val report: (String) -> Unit) : RootLease {
     private val messages = ArrayBlockingQueue<String>(32)
     private val done = AtomicBoolean(false)
     private val installed = AtomicBoolean(false)
@@ -124,7 +134,7 @@ internal class RootRuleLease(private val process: java.lang.Process, private val
         }
         error(if (cancelled.get()) "Root 网络设置已取消" else "等待 su 授权超时，请授权后重试")
     }
-    fun checkActive() {
+    override fun checkActive() {
         if (!installed.get()) return // No REJECT branch: no rule was needed.
         check(!closed.get() && !removed.get() && !done.get()) { "Root 临时规则租约已结束，请重新授权并自测" }
         try { process.exitValue() } catch (_: IllegalThreadStateException) { return }

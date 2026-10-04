@@ -31,11 +31,11 @@ class WiredVpnService : VpnService() {
         report: (String) -> Unit, failure: (Throwable) -> Unit): Closeable {
         check(bridge == null && diagnosticCancellation == null) { "A USB bridge or network probe is already running" }
         val tun = tunnel("DiPlay Wired")
-        var rootRule: RootRuleLease? = null
+        var rootRule: RootLease? = null
         try {
             val network = NetworkEnvironment.interfaceForTun(tun.fd)
             NetworkEnvironment.report(this, network, report)
-            if (NetworkCompatibilitySettings.enabled(this)) rootRule = RootIpv6Compatibility.open(network.name, cancelled, report)
+            if (NetworkCompatibilitySettings.anyEnabled(this)) rootRule = RootIpv6Compatibility.open(this, network.name, cancelled, report)
             check(!cancelled.get()) { "USB 网络设置已取消" }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
             val launch = PendingIntent.getActivity(this, 0, Intent(this, WiredActivity::class.java), flags)
@@ -71,7 +71,7 @@ class WiredVpnService : VpnService() {
         try { tun.use {
             val network = NetworkEnvironment.interfaceForTun(it.fd)
             NetworkEnvironment.report(this, network, report)
-            val rootRule = if (NetworkCompatibilitySettings.enabled(this)) RootIpv6Compatibility.open(network.name, cancelled, report) else null
+            val rootRule = if (NetworkCompatibilitySettings.anyEnabled(this)) RootIpv6Compatibility.open(this, network.name, cancelled, report) else null
             try { NetworkProbe.run(it, network, cancelled, report) { rootRule?.checkActive() } } finally { rootRule?.close() }
         } }
         finally {
@@ -96,7 +96,7 @@ internal class TunBridge(
     private val ncm: LegacyNcm,
     private val hostMac: ByteArray,
     val network: NetworkInterface,
-    private val rootRule: RootRuleLease?,
+    private val rootRule: RootLease?,
     private val report: (String) -> Unit,
     private val failure: (Throwable) -> Unit,
 ) : Closeable {

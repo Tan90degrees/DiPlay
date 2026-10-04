@@ -16,6 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check public source
         run: python3 scripts/check_public_tree.py
+      - name: Temporary ADB helper cleanup and authorization boundaries
+        run: python3 legacy-wired/tools/test_adb_root_helper.py
+      - name: PowerShell ADB launcher process and argument handling
+        run: python3 legacy-wired/tools/test_helper_launcher.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

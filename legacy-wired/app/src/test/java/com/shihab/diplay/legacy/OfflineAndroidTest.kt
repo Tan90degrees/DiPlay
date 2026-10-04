@@ -87,6 +87,13 @@ class OfflineAndroidTest {
                 Shadows.shadowOf(Looper.getMainLooper()).idle()
                 assertTrue(NetworkCompatibilitySettings.enabled(context))
                 NetworkCompatibilitySettings.enable(context, false)
+                views.filterIsInstance<Button>().first { it.text == "网络兼容" }.performClick()
+                (ShadowAlertDialog.getLatestAlertDialog() as AlertDialog).getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                assertFalse(NetworkCompatibilitySettings.adbEnabled(context))
+                (ShadowAlertDialog.getLatestAlertDialog() as AlertDialog).getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                assertTrue(NetworkCompatibilitySettings.adbEnabled(context))
+                assertFalse(NetworkCompatibilitySettings.enabled(context))
+                NetworkCompatibilitySettings.enable(context, false)
             }
             views.filterIsInstance<Button>().first { it.text == "USB 接口自测" }.performClick()
             Shadows.shadowOf(Looper.getMainLooper()).idle()

@@ -20,7 +20,7 @@ internal object NetworkEnvironment {
         emit("网络环境：UID=${Process.myUid()}；INTERNET=${context.checkCallingOrSelfPermission(android.Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED}；内核=${read("/proc/version", 240)}")
         emit("网络环境：${network.name} index=${network.index}；IPv6 禁用 all=${read("/proc/sys/net/ipv6/conf/all/disable_ipv6", 32)}，接口=${read("/proc/sys/net/ipv6/conf/${network.name}/disable_ipv6", 32)}")
         val routes = read("/proc/net/ipv6_route", 65536).lineSequence().filter { it.trim().split(Regex("\\s+")).lastOrNull() == network.name }.count()
-        emit("网络环境：可见 ${network.name} IPv6 路由条目=$routes；Root 兼容=${NetworkCompatibilitySettings.enabled(context)}")
+        emit("网络环境：可见 ${network.name} IPv6 路由条目=$routes；Root 兼容=${NetworkCompatibilitySettings.enabled(context)}；ADB 辅助=${NetworkCompatibilitySettings.adbEnabled(context)}")
     }
     fun interfaceForTun(fd: Int): NetworkInterface {
         val name = checkNotNull(NativeUsbIo.tunName(fd)) { "无法从授权 fd 读取 TUN 名称" }

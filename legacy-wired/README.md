@@ -230,6 +230,46 @@ CI 同时运行原有 USBMUX 分片、iAP2、NTB 与 NDP 回归检查，以及 A
 合成 USBMUX peer 验证真实 host/TCP 实现的握手、大数据拆分、读回和取消。
 该 peer 只存在于测试源码，生产 APK 不含可选假手机或假认证后端。
 
+### ADB 临时 IPv6 辅助（0.1.6 调试版）
+
+0.1.5 的车机日志已证明 su 拒绝应用 UID，不能通过重复参数重试解决。
+优先使用能对应用明确授权的 Root 管理器；若仅 ADB shell 可用 Root，可由设备所有者在
+电脑启动临时辅助。电脑必须通过 USB 或已授权的无线 ADB 连到车机；
+同一 USB 端口无法同时连接电脑和 iPhone 时，可先用电脑连接车机运行本机网络自测。
+电脑连接 iPhone 或 Android 模拟器不能验证车机的 USB/VPN。
+
+在 PowerShell 7 中运行（adb 已加入 PATH）：
+
+~~~powershell
+pwsh -File .\legacy-wired\tools\Start-LegacyIpv6Helper.ps1 -Serial 车机ADB序列号
+~~~
+
+只有一个设备时可省略 -Serial；可用 -AdbPath 指定 adb.exe。
+脚本先检查 API 19、调试 APK 的 run-as/实际 UID 和 shell 的真实 Root 权限，
+然后把固定辅助脚本写入应用私有 files 目录并前台运行。
+车机需要允许 shell 使用 su 和 run-as；厂商禁用这些能力时会停止并报告原因。
+Android 的 [run-as 实现](https://github.com/aosp-mirror/platform_system_core/blob/android-4.4.2_r2/run-as/run-as.c)
+只接受 root/shell 调用且要求目标包可调试，因此正式 APK 不支持本工具。
+
+保持终端和 ADB 连接，在应用点“网络兼容”→“ADB 临时辅助”→“启用 ADB 辅助”，
+再运行网络自测。预期看到临时规则就绪、五轮 IPv6/UDP 回包和“临时规则已删除”。
+结束辅助按 Ctrl+C。默认最多 30 分钟，-MaxMinutes 可设 1–240 分钟。
+应用模式会保存，但每次测试/连接都必须有正在运行的电脑辅助。
+
+IPC 在应用私有目录，使用随机租约标签、实际应用 UID 和 8 秒心跳；
+应用退出、请求超时、ADB 标准输入断开或辅助到期都删除该租约的完整规则。
+只修改 st_filter_OUTPUT 中当前 UID/TUN/fe80::2→fe80::/64 的临时 RETURN 条目，
+不修改 su 授权、不写系统分区、不清空规则、不更改默认策略。
+删除失败会明确报告；无法确认时停止使用并重启车机。
+若辅助上次被强制杀死且报告 STALE_LOCK，先重启车机，确认无旧进程后运行：
+~~~text
+adb shell run-as com.shihab.diplay.legacy rmdir files/adb-root-helper-lock
+~~~
+这只删除空的辅助锁目录。规则存在性由本次电脑/应用日志共同确认。
+辅助测试使用伪 ip6tables/run-as，覆盖正常释放、EOF、心跳/硬超时、失败及畸形请求；
+尚未证明本车机允许 shell Root，或临时例外可以消除当前 EPERM。
+完整 CarPlay 仍需要可用认证身份、真实 USB bulk/NCM 与 iPhone 会话验证。
+
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |
