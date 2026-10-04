@@ -88,9 +88,14 @@ class OfflineAndroidTest {
                 assertTrue(NetworkCompatibilitySettings.enabled(context))
                 NetworkCompatibilitySettings.enable(context, false)
                 views.filterIsInstance<Button>().first { it.text == "网络兼容" }.performClick()
-                (ShadowAlertDialog.getLatestAlertDialog() as AlertDialog).getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                val networkSettings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+                networkSettings.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
                 assertFalse(NetworkCompatibilitySettings.adbEnabled(context))
-                (ShadowAlertDialog.getLatestAlertDialog() as AlertDialog).getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                val confirmation = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+                assertNotSame(networkSettings, confirmation)
+                confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
                 assertTrue(NetworkCompatibilitySettings.adbEnabled(context))
                 assertFalse(NetworkCompatibilitySettings.enabled(context))
                 NetworkCompatibilitySettings.enable(context, false)
