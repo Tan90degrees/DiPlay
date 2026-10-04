@@ -48,6 +48,7 @@ internal object DecoderProbe {
             val begin = SystemClock.elapsedRealtime()
             var submitted = 0
             var rendered = 0
+            val timestamps = mutableSetOf<Long>()
             var inputEnded = false
             var outputEnded = false
             var playbackStart = -1L
@@ -63,7 +64,9 @@ internal object DecoderProbe {
                             decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputEnded = true
                         } else {
-                            decoder.queueInputBuffer(index, 0, count, extractor.sampleTime, 0)
+                            val timestamp = extractor.sampleTime
+                            decoder.queueInputBuffer(index, 0, count, timestamp, 0)
+                            timestamps.add(timestamp)
                             submitted++; extractor.advance()
                         }
                     }
@@ -71,7 +74,9 @@ internal object DecoderProbe {
                 val index = decoder.dequeueOutputBuffer(info, 5_000)
                 if (index >= 0) {
                     outputEnded = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                    val frame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && (!outputEnded || info.size > 0)
+                    // Vendor codecs may report size=0 for Surface frames, including the final EOS frame.
+                    // Match submitted timestamps to distinguish real frames from empty EOS/config buffers.
+                    val frame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && timestamps.remove(info.presentationTimeUs)
                     if (frame) {
                         if (playbackStart < 0) playbackStart = SystemClock.elapsedRealtime() - info.presentationTimeUs / 1000
                         val target = playbackStart + info.presentationTimeUs / 1000

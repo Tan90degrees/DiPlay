@@ -11,10 +11,19 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.FileInputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [19, 21], application = Application::class)
 class DiagnosticReportTest {
+    @Test fun cancelledProbeDoesNotOpenMediaOrCreateADecoder() {
+        val messages = mutableListOf<String>()
+        val surface = android.view.Surface()
+        try {
+            DecoderProbe.run(RuntimeEnvironment.getApplication(), surface, AtomicBoolean(true), messages::add)
+            assertEquals(listOf("H.264 测试已取消"), messages)
+        } finally { surface.release() }
+    }
     @Test fun logRetainsRecentMessagesWithinMemoryLimit() {
         val log = DiagnosticLog()
         repeat(101) { log.add("message $it " + "x".repeat(1200)) }
