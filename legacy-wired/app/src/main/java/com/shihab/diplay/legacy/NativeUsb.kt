@@ -146,5 +146,6 @@ object NativeUsbIo {
     external fun reconnect(fd: Int, number: Int)
     external fun close(fd: Int)
     external fun tunRead(fd: Int, data: ByteArray, timeout: Int): Int
+    external fun tunName(fd: Int): String?
     external fun tunWrite(fd: Int, data: ByteArray): Int
 }

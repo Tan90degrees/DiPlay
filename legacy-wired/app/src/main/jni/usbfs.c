@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/usbdevice_fs.h>
+#include <linux/if.h>
+#include <linux/if_tun.h>
 #include <poll.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -99,6 +101,14 @@ JNIEXPORT jint JNICALL JNI_METHOD(tunRead)(JNIEnv *env, jobject self, jint fd, j
     int saved_errno = errno;
     if (result > 0) (*env)->SetByteArrayRegion(env, data, 0, result, (jbyte *)bytes);
     return result < 0 ? -saved_errno : result;
+}
+JNIEXPORT jstring JNICALL JNI_METHOD(tunName)(JNIEnv *env, jobject self, jint fd) {
+    (void)self;
+    struct ifreq request;
+    memset(&request, 0, sizeof(request));
+    if (ioctl(fd, TUNGETIFF, &request) < 0) return NULL;
+    request.ifr_name[IFNAMSIZ - 1] = '\0';
+    return (*env)->NewStringUTF(env, request.ifr_name);
 }
 JNIEXPORT jint JNICALL JNI_METHOD(tunWrite)(JNIEnv *env, jobject self, jint fd, jbyteArray data) {
     (void)self;

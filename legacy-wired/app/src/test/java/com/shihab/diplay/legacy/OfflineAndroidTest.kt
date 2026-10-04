@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.media.AudioTrack
 import android.os.Looper
+import android.os.Build
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -77,6 +78,15 @@ class OfflineAndroidTest {
         fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
         try {
             val views = descendants(activity.get().window.decorView)
+            assertFalse(NetworkCompatibilitySettings.enabled(context))
+            if (Build.VERSION.SDK_INT < 21) {
+                views.filterIsInstance<Button>().first { it.text == "网络兼容" }.performClick()
+                val settings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+                assertFalse(NetworkCompatibilitySettings.enabled(context))
+                settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                assertTrue(NetworkCompatibilitySettings.enabled(context))
+                NetworkCompatibilitySettings.enable(context, false)
+            }
             views.filterIsInstance<Button>().first { it.text == "USB 接口自测" }.performClick()
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             views.filterIsInstance<Button>().first { it.text == "离线自测" }.performClick()

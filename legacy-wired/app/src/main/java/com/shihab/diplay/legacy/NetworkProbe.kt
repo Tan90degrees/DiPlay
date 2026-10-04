@@ -9,6 +9,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.SocketException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Small, strict UDP echo fixture; never forwards unrelated traffic or IPv6 extension headers. */
@@ -50,21 +51,25 @@ internal object ProbeUdpPacket {
 }
 
 internal object NetworkProbe {
-    fun run(tun: ParcelFileDescriptor, cancelled: AtomicBoolean, report: (String) -> Unit) {
+    fun run(tun: ParcelFileDescriptor, network: NetworkInterface, cancelled: AtomicBoolean, report: (String) -> Unit) {
         if (cancelled.get()) return
         val local = InetAddress.getByName("fe80::2")
         val peer = InetAddress.getByName("fe80::1")
-        val network = checkNotNull(NetworkInterface.getByInetAddress(local)) { "未找到自测 TUN 的 IPv6 接口" }
         val scopedLocal = Inet6Address.getByAddress(null, local.address, network)
         val scopedPeer = Inet6Address.getByAddress(null, peer.address, network)
         report("网络自测：TUN=${network.name}；测试授权 fd 和作用域 IPv6 UDP 回包")
         DatagramSocket(null).use { socket ->
             socket.bind(InetSocketAddress(scopedLocal, 0)); socket.soTimeout = 250
+            report("网络自测：UDP bind 通过；本地作用域=${scopedLocal.scopeId}，目标作用域=${scopedPeer.scopeId}")
             val buffer = ByteArray(16384)
             repeat(5) { sequence ->
                 if (cancelled.get()) return
                 val payload = "DiPlay-offline-$sequence".toByteArray(Charsets.UTF_8)
-                socket.send(DatagramPacket(payload, payload.size, scopedPeer, 47019))
+                try { socket.send(DatagramPacket(payload, payload.size, scopedPeer, 47019)) }
+                catch (e: SocketException) {
+                    if (e.message?.contains("EPERM") == true) report("IPv6 sendto 被系统拒绝；KitKat VPN 的 IPv6 REJECT 是候选原因。可在网络兼容中主动启用 Root 自测；TUN 读写尚未验证")
+                    throw e
+                }
                 val deadline = SystemClock.elapsedRealtime() + 3000
                 var replied = false
                 while (!cancelled.get() && SystemClock.elapsedRealtime() < deadline) {

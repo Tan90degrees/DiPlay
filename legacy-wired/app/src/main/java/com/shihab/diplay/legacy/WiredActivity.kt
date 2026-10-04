@@ -120,6 +120,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         button("USB 接口自测") { probeUsbInterfaces() }
         button("H.264 测试") { probeDecoder() }
         button("离线自测") { showSelfTests() }
+        button("网络兼容") { showNetworkCompatibility() }
         button("日志") { showLog() }
         button("重置配对") {
             if (busy) { report("请先断开，等待连接清理完成"); return@button }
@@ -305,6 +306,18 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         if (!readyForProbe()) return
         val service = vpn ?: run { report("VPN 服务尚未准备好，请稍后重试"); return }
         diagnosticJob { service.probe(it, ::report) }
+    }
+    private fun showNetworkCompatibility() {
+        if (!readyForProbe()) return
+        if (Build.VERSION.SDK_INT >= 21) { report("Root IPv6 兼容仅用于 Android 4.4；当前使用普通网络模式"); return }
+        val enabled = NetworkCompatibilitySettings.enabled(this)
+        AlertDialog.Builder(this).setTitle("Android 4.4 IPv6 兼容")
+            .setMessage("当前：${if (enabled) "Root 兼容" else "普通模式"}。\n\n启用后，自测和有线连接会请求 su，仅为本应用、当前 TUN、fe80::/64 添加临时防火墙例外；停止时删除。用于排查 IPv6 sendto EPERM，仍需实机验证。异常退出后若无法确认删除，请重启车机。")
+            .setPositiveButton(if (enabled) "恢复普通模式" else "启用 Root 兼容") { _, _ ->
+                NetworkCompatibilitySettings.enable(this, !enabled)
+                report("网络模式已设为${if (enabled) "普通模式" else "Root IPv6 兼容"}；请重新运行网络自测，确认回包与临时规则删除")
+                saveReport()
+            }.setNegativeButton("取消", null).show()
     }
     private fun diagnosticJob(body: (AtomicBoolean) -> Unit) {
         val cancelled = AtomicBoolean(false)

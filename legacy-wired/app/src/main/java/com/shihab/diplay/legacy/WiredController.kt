@@ -81,9 +81,9 @@ class WiredController(
         ncmUsb.claim(checkNotNull(config.ncmControl))
         ncmUsb.claim(checkNotNull(config.ncmData))
         val ncm = own(LegacyNcm(ncmUsb, checkNotNull(config.ncmData)))
-        own(vpn.connect(ncm, hostMac) { error -> status("USB 网络失败：${error.message}"); close() })
+        own(vpn.connect(ncm, hostMac, closed, status) { error -> status("USB 网络失败：${error.message}"); close() })
         val rawAddress = InetAddress.getByName("fe80::2")
-        val tunInterface = checkNotNull(NetworkInterface.getByInetAddress(rawAddress)) { "未找到 USB VPN 的 IPv6 接口" }
+        val tunInterface = vpn.activeInterface()
         val scopedAddress = Inet6Address.getByAddress(null, rawAddress.address, tunInterface)
         val server = own(ServerSocket().apply {
             reuseAddress = true

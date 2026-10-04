@@ -14,6 +14,7 @@ import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
+import java.net.NetworkInterface
 
 /** API 19's nonblocking TUN fd is polled natively; no android.system or setBlocking calls. */
 class WiredVpnService : VpnService() {
@@ -25,10 +26,16 @@ class WiredVpnService : VpnService() {
     override fun onBind(intent: Intent): IBinder? =
         if (intent.action == SERVICE_INTERFACE) super.onBind(intent) else binder
 
-    @Synchronized fun connect(ncm: LegacyNcm, mac: ByteArray, failure: (Throwable) -> Unit): Closeable {
+    @Synchronized fun connect(ncm: LegacyNcm, mac: ByteArray, cancelled: AtomicBoolean,
+        report: (String) -> Unit, failure: (Throwable) -> Unit): Closeable {
         check(bridge == null && diagnosticCancellation == null) { "A USB bridge or network probe is already running" }
         val tun = tunnel("DiPlay Wired")
+        var rootRule: Closeable? = null
         try {
+            val network = NetworkEnvironment.interfaceForTun(tun.fd)
+            NetworkEnvironment.report(this, network, report)
+            if (NetworkCompatibilitySettings.enabled(this)) rootRule = RootIpv6Compatibility.open(network.name, cancelled, report)
+            check(!cancelled.get()) { "USB 网络设置已取消" }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
             val launch = PendingIntent.getActivity(this, 0, Intent(this, WiredActivity::class.java), flags)
             @Suppress("DEPRECATION")
@@ -36,7 +43,7 @@ class WiredVpnService : VpnService() {
                 .setContentTitle("DiPlay 有线连接").setContentText("USB IPv6 通道运行中")
                 .setContentIntent(launch).setOngoing(true).build()
             startForeground(19, notification)
-            val instance = TunBridge(tun, ncm, mac, failure)
+            val instance = TunBridge(tun, ncm, mac, network, rootRule, failure)
             bridge = instance
             failureCallback = failure
             instance.start()
@@ -45,8 +52,9 @@ class WiredVpnService : VpnService() {
                 instance.awaitClosed() // Controller cleanup worker; prevent stale fe80::2 on reconnect.
                 synchronized(this) { if (bridge === instance) { bridge = null; failureCallback = null; stopForeground(true) } }
             }
-        } catch (e: Exception) { tun.close(); stopForeground(true); throw e }
+        } catch (e: Exception) { try { rootRule?.close() } finally { tun.close(); stopForeground(true) }; throw e }
     }
+    fun activeInterface(): NetworkInterface = checkNotNull(bridge) { "USB VPN 尚未建立" }.network
     private fun tunnel(session: String): ParcelFileDescriptor {
         val builder = Builder().setSession(session).setMtu(1280)
             .addAddress("fe80::2", 64).addRoute("fe80::", 64)
@@ -59,7 +67,12 @@ class WiredVpnService : VpnService() {
             if (cancelled.get()) return
             tunnel("DiPlay 本机网络自测").also { diagnosticCancellation = cancelled }
         }
-        try { tun.use { NetworkProbe.run(it, cancelled, report) } }
+        try { tun.use {
+            val network = NetworkEnvironment.interfaceForTun(it.fd)
+            NetworkEnvironment.report(this, network, report)
+            val rootRule = if (NetworkCompatibilitySettings.enabled(this)) RootIpv6Compatibility.open(network.name, cancelled, report) else null
+            try { NetworkProbe.run(it, network, cancelled, report) } finally { rootRule?.close() }
+        } }
         finally {
             synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
             report("网络自测 TUN 已关闭")
@@ -81,6 +94,8 @@ internal class TunBridge(
     private val tun: ParcelFileDescriptor,
     private val ncm: LegacyNcm,
     private val hostMac: ByteArray,
+    val network: NetworkInterface,
+    private val rootRule: Closeable?,
     private val failure: (Throwable) -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
@@ -123,7 +138,7 @@ internal class TunBridge(
         Thread({
             try {
                 threads.forEach { if (it !== Thread.currentThread()) it.join() }
-                tun.close()
+                try { rootRule?.close() } finally { tun.close() }
             } finally { finished.countDown() }
         }, "legacy-tun-cleanup").start()
     }
