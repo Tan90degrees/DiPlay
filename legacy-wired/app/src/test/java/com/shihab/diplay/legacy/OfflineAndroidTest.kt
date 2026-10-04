@@ -84,6 +84,7 @@ class OfflineAndroidTest {
                 val settings = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
                 assertFalse(NetworkCompatibilitySettings.enabled(context))
                 settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
                 assertTrue(NetworkCompatibilitySettings.enabled(context))
                 NetworkCompatibilitySettings.enable(context, false)
             }
