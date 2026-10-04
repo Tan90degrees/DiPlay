@@ -27,22 +27,26 @@ class WiredController(
     private val ended: () -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
-    private val resources = mutableListOf<Closeable>()
+    private val resources = SessionResources { status("连接清理失败：${it.javaClass.simpleName}；请重新插拔手机") }
+    private val mediaSessions = SessionMediaSinks(sink, sink::reset)
+    private val startLock = Any()
+    private var started = false
     @Volatile private var active: AirPlaySession? = null
     private fun <T : Closeable> own(item: T): T {
-        synchronized(resources) { if (!closed.get()) { resources += item; return item } }
-        item.close()
-        throw IllegalStateException("Connection cancelled")
+        return resources.own(item)
     }
     private fun <T> own(item: T, dispose: (T) -> Unit): T {
         own(Closeable { dispose(item) }); return item
     }
-    fun start() = Thread({
+    private val worker = Thread({
         try { run() } catch (e: Exception) {
             if (!closed.get()) status("连接失败：${e.message ?: e.javaClass.simpleName}")
         } finally { close() }
-    }, "legacy-wired-control").start()
+    }, "legacy-wired-control")
+    fun start() { synchronized(startLock) { check(!started && !closed.get()) { "连接已启动或取消" }; started = true; worker.start() } }
     private fun run() {
+        check(!closed.get()) { "Connection cancelled" }
+        check(sink.ready()) { "上一轮媒体输出尚未释放，请稍候重试或重启应用" }
         val manager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         check(manager.hasPermission(device)) { "USB permission is missing" }
         val connection = own(checkNotNull(manager.openDevice(device)) { "无法打开 USB 设备" }) { it.close() }
@@ -61,35 +65,43 @@ class WiredController(
         val identityStore = LegacyIdentity(context)
         val mfi = identityStore.mfi() // Fail before claiming pipes if credentials are unavailable.
         val identity = identityStore.identity()
-        val hostMac = byteArrayOf(2) + identity.publicKey.copyOf(5)
+        val function = checkNotNull(config.ncmFunction)
+        val fallbackMac = byteArrayOf(2) + identity.publicKey.copyOf(5)
+        val hostMac = try { NcmHostIdentity.read(function.control.ethernetMacStringIndex, usb::stringDescriptor) }
+            catch (e: Exception) { status("NCM MAC 描述符读取失败：${e.javaClass.simpleName}；使用本机稳定地址"); null } ?: fallbackMac
+        status("NCM 功能：控制=${function.control.number}，数据=${function.data.number}/${function.data.alternate}；MAC=${if (hostMac.contentEquals(fallbackMac)) "本机稳定地址" else "USB 描述符"}")
         val macText = hostMac.joinToString(":") { "%02x".format(it.toInt() and 255) }
         usb.select(config)
         usb.claim(checkNotNull(config.mux))
         val pipe = own(Iap2UsbSession(usb, checkNotNull(config.mux)))
         status("建立 USBMUX；请解锁 iPhone 并允许信任…")
         val mux = own(Iap2UsbMuxHost.open(pipe, onDiagnostic = { status(it) }))
-        val record = identityStore.loadLockdown() ?: LockdownPairingClient(mux).pair(
-            "DiPlayLegacy", identityStore.uuid("host"), identityStore.uuid("buid"), 120_000,
-            isCancelled = closed::get,
-        ).pairRecord.also(identityStore::saveLockdown)
         status("打开 iAP2 CarKit 服务…")
-        val carkit = own(LockdownCarKitClient(mux).open(record, "DiPlayLegacy"))
-        val session = own(Iap2Session.open(carkit)) { it.close() }
+        val carKitClient = LockdownCarKitClient(mux)
+        val carkit = own(LockdownRecovery.open(identityStore.loadLockdown(), pair = {
+            status("等待 iPhone 信任配对…")
+            LockdownPairingClient(mux).pair("DiPlayLegacy", identityStore.uuid("host"), identityStore.uuid("buid"), 120_000,
+                isCancelled = closed::get).pairRecord.also(identityStore::saveLockdown)
+        }, invalidate = identityStore::resetPhone, open = { record -> carKitClient.open(record, "DiPlayLegacy") }, report = status))
+        // The formatter includes raw TLV bodies on later lines. Reports retain headers only.
+        val session = own(Iap2Session.open(carkit, traceContext = "legacy-wired", onTrace = { status(it.substringBefore('\n')) })) { it.close() }
         // A separate Android-authorized open description owns NCM interfaces.
         val ncmConnection = own(checkNotNull(manager.openDevice(device)) { "无法打开 NCM USB 连接" }) { it.close() }
         val ncmUsb = own(NativeUsb(ncmConnection))
-        ncmUsb.claim(checkNotNull(config.ncmControl))
-        ncmUsb.claim(checkNotNull(config.ncmData))
-        val ncm = own(LegacyNcm(ncmUsb, checkNotNull(config.ncmData)))
+        ncmUsb.claim(function.control)
+        ncmUsb.claim(function.data)
+        check(ncmUsb.currentAlternate(function.data.number) == function.data.alternate) { "NCM 数据备用接口读回不匹配" }
+        val ncm = own(LegacyNcm(ncmUsb, function.data))
         own(vpn.connect(ncm, hostMac, closed, status) { error -> status("USB 网络失败：${error.message}"); close() })
         val rawAddress = InetAddress.getByName("fe80::2")
         val tunInterface = vpn.activeInterface()
         val scopedAddress = Inet6Address.getByAddress(null, rawAddress.address, tunInterface)
-        val server = own(ServerSocket().apply {
+        val server = own(ServerSocket()).apply {
             reuseAddress = true
             bind(InetSocketAddress(scopedAddress, 7000))
             soTimeout = 250
-        })
+        }
+        status("AirPlay 已监听当前 USB 网络；等待 iAP2 启动通知")
         val configAirPlay = AirPlayConfig("DiPlay Wired", macText, macText, "950.7.1",
             AirPlayDisplayConfig(800, 480, fps = 30), hevc = false, microphone = false,
             manufacturer = "DiPlay", model = "LegacyWired", oemLabel = "DiPlay", opus = false)
@@ -98,7 +110,11 @@ class WiredController(
             try {
                 while (!closed.get()) {
                     val socket = try { server.accept() } catch (_: SocketTimeoutException) { continue }
+                    // A wired receiver accepts only the link-local peer on its bound TUN address.
+                    if (!socket.inetAddress.isLinkLocalAddress) { socket.close(); continue }
+                    own(socket)
                     active?.close()
+                    val mediaLease = own(mediaSessions.open())
                     val air = own(AirPlaySession(socket, configAirPlay, identity, pairs, mfi,
                         object : AirPlaySessionListener {
                             override fun onSessionActive(session: AirPlaySession) { status("CarPlay 已连接，等待画面…") }
@@ -106,9 +122,11 @@ class WiredController(
                             override fun onTransportError(message: String) { status("AirPlay：$message") }
                             override fun onSessionEnded(session: AirPlaySession) {
                                 if (active === session) active = null
-                                synchronized(resources) { resources.remove(session) }
+                                mediaLease.close()
+                                resources.remove(session); resources.remove(mediaLease); resources.remove(socket)
+                                socket.close()
                             }
-                        }, CarPlayMediaEngine(sink, microphoneEnabled = false)))
+                        }, CarPlayMediaEngine(mediaLease, microphoneEnabled = false)))
                     active = air
                     air.start()
                 }
@@ -118,7 +136,7 @@ class WiredController(
         status("开始 iAP2 身份识别与认证…")
         val result = Iap2WiredControlClient(session, Iap2MfiAuthenticationClient(mfi)).run(
             Iap2IdentificationConfig("DiPlay Wired", "LegacyWired", "DiPlay", identity.pairingId,
-                "0.1.0", "ARMv7", carPlayUsbInterfaceNumber = checkNotNull(config.ncmData).number),
+                BuildConfig.VERSION_NAME, "ARMv7", carPlayUsbInterfaceNumber = function.data.number),
             Iap2WiredCarPlayEndpoint(listOf("fe80::2"), server.localPort, identity.publicKeyHex, "950.7.1", macText),
             availableCurrentMilliAmps = 0,
             timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
@@ -132,10 +150,14 @@ class WiredController(
         active = null
         // Closing descriptors/codecs may wait. Keep all teardown off Android's UI thread.
         Thread({
-            val owned = synchronized(resources) { resources.toList().asReversed().also { resources.clear() } }
-            owned.forEach { try { it.close() } catch (_: Exception) {} }
-            sink.reset()
-            ended()
+            try {
+                resources.close()
+                // The acquisition worker can still be disposing a resource returned after cancellation.
+                val join = synchronized(startLock) { started }
+                if (join) worker.join()
+                sink.reset()
+                if (!sink.awaitIdle(5000)) status("媒体清理超时；重连前请等待，仍失败时重启应用")
+            } finally { ended() }
         }, "legacy-wired-cleanup").start()
     }
 }

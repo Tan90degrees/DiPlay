@@ -11,6 +11,8 @@ data class UsbPipe(val address: Int, val attributes: Int, val packetSize: Int) {
 data class UsbAlternate(
     val number: Int, val alternate: Int, val deviceClass: Int, val subclass: Int, val protocol: Int,
     val pipes: MutableList<UsbPipe> = mutableListOf(),
+    var dataInterfaces: List<Int>? = null,
+    var ethernetMacStringIndex: Int? = null,
 ) {
     fun input() = pipes.singleOrNull { it.bulk && it.input }
     fun output() = pipes.singleOrNull { it.bulk && !it.input }
@@ -19,12 +21,27 @@ data class UsbConfigurationData(val value: Int, val interfaces: List<UsbAlternat
     val mux get() = interfaces.firstOrNull {
         it.deviceClass == 0xff && it.subclass == 0xfe && it.protocol == 2 && it.input() != null && it.output() != null
     }
-    val ncmControl get() = interfaces.firstOrNull { it.deviceClass == 2 && it.subclass == 0x0d }
-    val ncmData get() = interfaces.filter {
-        it.deviceClass == 0x0a && it.input() != null && it.output() != null
-    }.minByOrNull { if (it.alternate == 1) 0 else 1 }
-    val carPlay get() = mux != null && ncmControl != null && ncmData != null
+    val ncmFunction: UsbNcmFunction? get() {
+        val candidates = interfaces.filter { it.deviceClass == 0x0a && it.input() != null && it.output() != null }
+        for (control in interfaces.filter { it.deviceClass == 2 && it.subclass == 0x0d }) {
+            val numbers = control.dataInterfaces ?: run {
+                // Old Apple descriptors may omit a Union. Prefer the adjacent function;
+                // never choose an unrelated first data interface from another NCM function.
+                if (candidates.any { it.number == control.number + 1 }) listOf(control.number + 1)
+                else candidates.map { it.number }.distinct().takeIf { it.size == 1 } ?: emptyList()
+            }
+            val data = candidates.filter { it.number in numbers }
+                .minByOrNull { if (it.alternate == 1) 0 else 1 } ?: continue
+            return UsbNcmFunction(control, data)
+        }
+        return null
+    }
+    val ncmControl get() = ncmFunction?.control
+    val ncmData get() = ncmFunction?.data
+    val carPlay get() = mux != null && ncmFunction != null
 }
+
+data class UsbNcmFunction(val control: UsbAlternate, val data: UsbAlternate)
 
 object UsbDescriptors {
     fun parse(bytes: ByteArray): UsbConfigurationData {
@@ -61,6 +78,22 @@ object UsbDescriptors {
                         throw IOException("Invalid/duplicate USB endpoint")
                     }
                     current!!.pipes += pipe
+                }
+                0x24 -> if (current?.deviceClass == 2 && current?.subclass == 0x0d) {
+                    if (length < 3) throw IOException("Short CDC functional descriptor")
+                    when (u8(offset + 2)) {
+                        6 -> {
+                            if (length < 5 || u8(offset + 3) != current!!.number || current!!.dataInterfaces != null)
+                                throw IOException("Invalid CDC Union descriptor")
+                            val data = (4 until length).map { u8(offset + it) }
+                            if (current!!.number in data || data.distinct().size != data.size) throw IOException("Invalid CDC Union slave interfaces")
+                            current!!.dataInterfaces = data
+                        }
+                        0x0f -> {
+                            if (length < 13 || current!!.ethernetMacStringIndex != null) throw IOException("Invalid CDC Ethernet descriptor")
+                            current!!.ethernetMacStringIndex = u8(offset + 3).takeIf { it != 0 }
+                        }
+                    }
                 }
             }
             offset += length

@@ -15,6 +15,7 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
 import java.net.NetworkInterface
+import java.util.concurrent.atomic.AtomicLong
 
 /** API 19's nonblocking TUN fd is polled natively; no android.system or setBlocking calls. */
 class WiredVpnService : VpnService() {
@@ -43,7 +44,7 @@ class WiredVpnService : VpnService() {
                 .setContentTitle("DiPlay 有线连接").setContentText("USB IPv6 通道运行中")
                 .setContentIntent(launch).setOngoing(true).build()
             startForeground(19, notification)
-            val instance = TunBridge(tun, ncm, mac, network, rootRule, failure)
+            val instance = TunBridge(tun, ncm, mac, network, rootRule, report, failure)
             bridge = instance
             failureCallback = failure
             instance.start()
@@ -96,11 +97,16 @@ internal class TunBridge(
     private val hostMac: ByteArray,
     val network: NetworkInterface,
     private val rootRule: RootRuleLease?,
+    private val report: (String) -> Unit,
     private val failure: (Throwable) -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val finished = CountDownLatch(1)
-    @Volatile private var peerMac: ByteArray? = null
+    private val ethernet = LegacyEthernetLink(hostMac)
+    private val incoming = AtomicLong()
+    private val outgoing = AtomicLong()
+    private val deferred = AtomicLong()
+    private val preStartTimeouts = AtomicLong()
     private val threads = listOf(worker("legacy-tun-out") {
         val buffer = ByteArray(16384)
         while (!closed.get()) {
@@ -108,25 +114,27 @@ internal class TunBridge(
             val count = NativeUsbIo.tunRead(tun.fd, buffer, 250)
             if (count == -11 || count == -4) continue
             if (count <= 0) throw IOException("TUN read failed ($count)")
-            val packet = buffer.copyOf(count)
-            val destination = EthernetIpv6Codec.multicastDestinationMac(packet) ?: peerMac ?: continue
-            val ipv6 = EthernetIpv6Codec.addNeighborAdvertisementTargetMac(packet, hostMac)
-            try { ncm.send(EthernetIpv6Codec.build(hostMac, destination, ipv6)) }
+            val frame = ethernet.outgoing(buffer.copyOf(count))
+            if (frame == null) { deferred.incrementAndGet(); continue }
+            try {
+                ncm.send(frame)
+                if (outgoing.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 出站帧已写入 NCM")
+            }
             catch (e: UsbIoException) {
                 // Before StartCarPlaySession the phone NAKs NCM. Drop that datagram; IP retries.
                 // Never resend a possibly partially transmitted NTB.
                 if (e.errno != 110 || ncm.started) throw e
+                if (preStartTimeouts.incrementAndGet() == 1L) report("USB 网络：iAP2 启动前 NCM 暂未就绪；等待手机启动通知")
             }
         }
     }, worker("legacy-tun-in") {
         while (!closed.get()) {
             rootRule?.checkActive()
             val frame = ncm.recv(250) ?: continue
-            val parsed = EthernetIpv6Codec.parseIpv6(frame) ?: continue
-            if (parsed.ipv6.size !in 40..1500 || (parsed.ipv6[0].toInt() ushr 4 and 15) != 6) continue
-            peerMac = parsed.sourceMac
-            val count = NativeUsbIo.tunWrite(tun.fd, parsed.ipv6)
-            if (count != parsed.ipv6.size) throw IOException("TUN write failed ($count)")
+            val ipv6 = ethernet.incoming(frame) ?: continue
+            val count = NativeUsbIo.tunWrite(tun.fd, ipv6)
+            if (count != ipv6.size) throw IOException("TUN write failed ($count)")
+            if (incoming.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 入站帧已注入 TUN")
         }
     })
     private fun worker(name: String, body: () -> Unit) = Thread({
@@ -140,6 +148,7 @@ internal class TunBridge(
         Thread({
             try {
                 threads.forEach { if (it !== Thread.currentThread()) it.join() }
+                report("USB 网络统计：入站=${incoming.get()}，出站=${outgoing.get()}，暂缓=${deferred.get()}，启动前超时=${preStartTimeouts.get()}")
                 try { rootRule?.close() } finally { tun.close() }
             } finally { finished.countDown() }
         }, "legacy-tun-cleanup").start()

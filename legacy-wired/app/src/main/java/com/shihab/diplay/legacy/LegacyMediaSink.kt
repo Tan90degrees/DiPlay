@@ -17,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ThreadPoolExecutor
 
 /** Keeps a valid H.264 reference chain after queue overflow or surface loss. */
 internal class VideoFrameQueue(private val capacity: Int = 8, private val byteLimit: Int = 2 * 1024 * 1024) {
@@ -44,6 +46,7 @@ internal class VideoFrameQueue(private val capacity: Int = 8, private val byteLi
 class LegacyMediaSink(private val status: (String) -> Unit) : MediaSink, Closeable {
     private val video = VideoOutput(status)
     private val audio = ConcurrentHashMap<AudioStreamId, AudioOutput>()
+    private val retiredAudio = ConcurrentLinkedQueue<AudioOutput>()
     fun surface(surface: Surface?) = video.surface(surface)
     override fun onVideoCodec(type: Int, codec: VideoCodec) {
         check(codec == VideoCodec.H264) { "此版本仅支持 H.264" }
@@ -54,25 +57,44 @@ class LegacyMediaSink(private val status: (String) -> Unit) : MediaSink, Closeab
     override fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) { video.diagnostic = handler }
     override fun onScreenStreamActive(type: Int, active: Boolean) { if (!active) video.reset() }
     override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
-        audio.remove(id)?.close()
+        audio.remove(id)?.let(::retire)
         if (format.codec == AudioCodecKind.OPUS) { status("系统没有可用的 Opus 后端，此音频流暂不播放"); return }
         audio[id] = AudioOutput(format, status)
     }
     override fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {
         if (rtp.size in 13..16384) audio[id]?.offer(rtp.copyOfRange(12, rtp.size))
     }
-    override fun onAudioStopped(id: AudioStreamId) { audio.remove(id)?.close() }
-    fun reset() { video.reset(); audio.values.forEach { it.close() }; audio.clear() }
+    override fun onAudioStopped(id: AudioStreamId) { audio.remove(id)?.let(::retire) }
+    private fun retire(output: AudioOutput) {
+        output.close(); retiredAudio.add(output)
+        retiredAudio.toList().forEach { if (it.awaitClosed(0)) retiredAudio.remove(it) }
+    }
+    fun reset() { video.reset(); audio.values.forEach(::retire); audio.clear() }
+    fun ready(): Boolean = retiredAudio.all { it.awaitClosed(0) } && video.ready()
+    /** Used by the connection cleanup worker, never by Android's UI thread. */
+    fun awaitIdle(timeoutMillis: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        for (output in retiredAudio.toList()) {
+            val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(0)
+            if (!output.awaitClosed(left)) return false
+            retiredAudio.remove(output)
+        }
+        return video.awaitReset(TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(0))
+    }
     override fun close() { reset(); video.close() }
 }
 
 private class VideoOutput(private val status: (String) -> Unit) : Closeable {
-    private val lock = Any()
+    private val lock = Object()
     private val queue = VideoFrameQueue()
     private val closed = AtomicBoolean(false)
     private var surface: Surface? = null
     private var config = ByteArray(0)
     private var revision = 0
+    private var appliedRevision = -1
+    private val finished = CountDownLatch(1)
+    private val recoveryCalls = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(1),
+        { task -> Thread(task, "legacy-video-recovery").apply { isDaemon = true } }, ThreadPoolExecutor.DiscardPolicy())
     @Volatile var recovery: (() -> Unit)? = null
     @Volatile var diagnostic: ((String) -> Unit)? = null
     private val worker = Thread(::run, "legacy-video").apply { start() }
@@ -94,16 +116,32 @@ private class VideoOutput(private val status: (String) -> Unit) : Closeable {
         }
         if (!accepted) requestKeyFrame()
     }
-    private fun requestKeyFrame() { try { recovery?.invoke() } catch (_: Exception) {} }
+    private fun requestKeyFrame() {
+        val handler = recovery ?: return
+        if (!closed.get()) recoveryCalls.execute { try { if (recovery === handler && !closed.get()) handler() } catch (_: Exception) {} }
+    }
+    fun awaitReset(timeoutMillis: Long): Boolean {
+        if (closed.get()) return finished.await(timeoutMillis, TimeUnit.MILLISECONDS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        synchronized(lock) {
+            while (appliedRevision < revision) {
+                val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                if (left <= 0) return false
+                lock.wait(left)
+            }
+            return config.isEmpty()
+        }
+    }
+    fun ready(): Boolean = synchronized(lock) { !closed.get() && config.isEmpty() && appliedRevision >= revision }
     private fun run() {
-        while (!closed.get()) {
+        try { while (!closed.get()) {
             try { decode() } catch (e: Exception) {
                 if (!closed.get()) {
                     status("H.264 解码失败：${e.message}。请断开后重新连接。")
                     synchronized(lock) { config = ByteArray(0); invalidate() }
                 }
             }
-        }
+        } } finally { finished.countDown() }
     }
     private fun decode() {
         var codec: MediaCodec? = null
@@ -131,6 +169,7 @@ private class VideoOutput(private val status: (String) -> Unit) : Closeable {
                         codec.configure(format, state.second, null, 0)
                         codec.start(); inputs = codec.inputBuffers
                     }
+                    synchronized(lock) { appliedRevision = currentRevision; lock.notifyAll() }
                 }
                 val decoder = codec
                 if (decoder == null) { Thread.sleep(10); continue }
@@ -158,7 +197,7 @@ private class VideoOutput(private val status: (String) -> Unit) : Closeable {
             }
         } finally { codec?.let { try { it.stop() } catch (_: Exception) {}; try { it.release() } catch (_: Exception) {} } }
     }
-    override fun close() { closed.set(true) }
+    override fun close() { closed.set(true); recoveryCalls.shutdownNow() }
 }
 
 internal class AudioOutput(private val format: AudioFormat, private val status: (String) -> Unit,

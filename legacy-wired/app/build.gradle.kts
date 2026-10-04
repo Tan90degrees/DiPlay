@@ -12,13 +12,14 @@ android {
         applicationId = "com.shihab.diplay.legacy"
         minSdk = 19
         targetSdk = 28
-        versionCode = 6
-        versionName = "0.1.5-wired-experimental"
+        versionCode = 7
+        versionName = "0.1.6-wired-experimental"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild { ndkBuild { arguments += "APP_PLATFORM=android-19" } }
         multiDexEnabled = true
     }
     externalNativeBuild { ndkBuild { path = file("src/main/jni/Android.mk") } }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -94,7 +95,14 @@ tasks.named("preBuild") { dependsOn(stageProtocols) }
 // Run the existing shared /info regression tests with the legacy protocol selection as well.
 val stageProtocolTests by tasks.registering(Sync::class) {
     from("../../shared/src/test/java")
-    include("com/shilapi/xcertplay/airplay/AirPlayInfoPlistTest.kt")
+    include("com/shilapi/xcertplay/airplay/AirPlayInfoPlistTest.kt",
+        "com/shilapi/xcertplay/transport/UsbMuxFrameBufferTest.kt",
+        "com/shilapi/xcertplay/transport/Ntb16CodecTest.kt",
+        "com/shilapi/xcertplay/transport/EthernetIpv6CodecTest.kt",
+        "com/shilapi/xcertplay/transport/Iap2ControlDeadlineTest.kt",
+        "com/shilapi/xcertplay/transport/Iap2WiredControlClientTest.kt",
+        "com/shilapi/xcertplay/transport/Iap2LinkEngineFileTransferTest.kt",
+        "com/shilapi/xcertplay/transport/Iap2RouteGuidanceSubscriptionTest.kt")
     into(layout.buildDirectory.dir("generated/protocol-tests"))
 }
 tasks.matching { it.name.contains("UnitTest") }.configureEach { dependsOn(stageProtocolTests) }

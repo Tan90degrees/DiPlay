@@ -64,7 +64,7 @@ class LegacyIdentity(private val context: Context) {
     fun resetPhone() {
         val edit = prefs.edit()
         prefs.all.keys.filter { it.startsWith("lockdown-") || it == "wifi" }.forEach(edit::remove)
-        edit.commit()
-        context.getSharedPreferences("airplay-pairings", Context.MODE_PRIVATE).edit().clear().commit()
+        check(edit.commit()) { "无法清除旧配对记录" }
+        check(context.getSharedPreferences("airplay-pairings", Context.MODE_PRIVATE).edit().clear().commit()) { "无法清除 AirPlay 配对记录" }
     }
 }

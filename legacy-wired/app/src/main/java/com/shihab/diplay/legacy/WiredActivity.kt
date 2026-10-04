@@ -271,7 +271,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         }
     }
     private fun showSelfTests() {
-        val entries = arrayOf("视频持续 60 秒", "音频 PCM / AAC", if (touchTesting) "结束触控测试" else "触控单击 / 拖动 / 双指", "网络 TUN / IPv6")
+        val entries = arrayOf("视频持续 60 秒", "音频 PCM / AAC", if (touchTesting) "结束触控测试" else "触控单击 / 拖动 / 双指", "网络 TUN / IPv6", "协议离线自测")
         AlertDialog.Builder(this).setTitle("无需 iPhone 的自测").setItems(entries) { _, index ->
             when (index) {
                 0 -> probeDecoder(rounds = 15)
@@ -294,6 +294,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
                         if (permission != null) startActivityForResult(permission, 20) else probeNetwork()
                     }
                 }
+                4 -> if (readyForProbe()) diagnosticJob { TransportProbe.run(it, ::report) }
             }
         }.setNegativeButton("关闭", null).show()
     }

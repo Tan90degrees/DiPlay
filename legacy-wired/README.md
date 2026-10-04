@@ -204,6 +204,32 @@ Root 模式后运行网络自测，提供 Root UID 检查和后续规则/回包/
 若显示应用 UID 不允许调用，需支持应用授权的 Root 管理器；参数兼容不能改变该权限限制。
 源码 APK 的缺少认证身份提示仍符合预期。
 
+0.1.5 后续真机报告：连续两次完整通过配置 1→5、MUX 1/0、NCM 控制 2/0、
+NCM 数据 3/1、释放接口和恢复配置 1，最终状态读回也通过。USB 接口操作与清理现已得到
+这两轮实机验证；bulk、认证与会话仍未验证。网络 Root 失败已明确为
+`/system/xbin/su` 拒绝应用 UID；普通模式 bind 成功但 sendto 仍为 EPERM。
+
+### 0.1.6：有线会话与重连完善
+
+NCM 控制/数据接口优先根据 CDC Union 配对，缺少 Union 时采用相邻或唯一数据接口；
+无法确定配对时不猜测另一个 NCM 功能。CDC Ethernet 的 MAC 字符串索引也从对应控制
+接口解析，通过语言描述符和设备级 GET_DESCRIPTOR 读取严格校验的单播地址；
+无可用描述符时使用本机稳定地址，与网络帧和启动通知保持一致。
+
+只对被 StartSession 明确拒绝的旧 InvalidHostID/InvalidPairRecord 自动清除并重新配对一次；
+信任拒绝、TLS 错误和其他协议失败不会触发循环配对。媒体回调按 AirPlay 会话隔离，
+旧连接的延迟启动/停止或关键帧回调不再影响新会话。断开后等待连接创建线程完成晚到
+资源的释放，再等待音频与解码器清理；不在 UI 线程等待。关键帧请求也使用单独的有界队列。
+
+USB/TUN 转换检查 IPv6 长度、单播来源和目的 MAC，剥离 Ethernet 填充后才注入 TUN；
+记录首次双向流量、暂缓及启动前超时计数。NTB16 解析防止循环 NDP/重复条目放大内存，
+并拒绝当前不支持的 CRC 格式。离线菜单新增内存中的分片/IPv6/UDP 回包转换自测；
+它不打开 USB、VPN 或认证资产，不能证明真实 USB bulk 或 CarPlay 成功。
+
+CI 同时运行原有 USBMUX 分片、iAP2、NTB 与 NDP 回归检查，以及 API 19/21 上用
+合成 USBMUX peer 验证真实 host/TCP 实现的握手、大数据拆分、读回和取消。
+该 peer 只存在于测试源码，生产 APK 不含可选假手机或假认证后端。
+
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |

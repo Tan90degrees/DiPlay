@@ -14,15 +14,25 @@ sealed class IphoneUsbException(message: String, cause: Throwable? = null) : IOE
 }
 
 /** API-19 pipe implementing the contract used by the upstream USBMUX state machine. */
-class Iap2UsbSession(private val usb: NativeUsb, private val alternate: UsbAlternate) : Closeable {
+internal interface UsbMuxPipe : Closeable {
+    fun write(data: ByteArray, timeoutMillis: Int)
+    fun read(timeoutMillis: Long): ByteArray?
+}
+
+class Iap2UsbSession internal constructor(private val io: UsbMuxPipe) : Closeable {
+    constructor(usb: NativeUsb, alternate: UsbAlternate) : this(object : UsbMuxPipe {
+        override fun write(data: ByteArray, timeoutMillis: Int) { usb.write(checkNotNull(alternate.output()), data, timeoutMillis) }
+        override fun read(timeoutMillis: Long) = usb.read(checkNotNull(alternate.input()), timeoutMillis)
+        override fun close() = usb.close()
+    })
     private val readLock = Any()
     private val writeLock = Any()
     fun write(data: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
-        usb.write(checkNotNull(alternate.output()), data, timeoutMillis)
+        io.write(data, timeoutMillis)
     }
     fun read(timeoutMillis: Long): ByteArray? = synchronized(readLock) {
-        try { usb.read(checkNotNull(alternate.input()), timeoutMillis) }
+        try { io.read(timeoutMillis) }
         catch (e: IOException) { throw IphoneUsbException.DeviceUnavailable("USBMUX receive failed", e) }
     }
-    override fun close() = usb.close()
+    override fun close() = io.close()
 }

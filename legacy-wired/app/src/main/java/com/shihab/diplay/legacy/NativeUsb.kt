@@ -46,6 +46,16 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
         if (control(0x80, 8, 0, 0, bytes) != 1) throw IOException("Short USB GET_CONFIGURATION")
         return bytes[0].toInt() and 255
     }
+    fun stringDescriptor(index: Int, language: Int): ByteArray {
+        require(index in 0..255 && language in 0..65535)
+        val header = ByteArray(2)
+        check(control(0x80, 6, 0x0300 or index, language, header) == 2) { "Short USB string header" }
+        val size = header[0].toInt() and 255
+        check(size in 2..254 && size % 2 == 0 && header[1] == 3.toByte()) { "Invalid USB string header" }
+        val bytes = ByteArray(size)
+        check(control(0x80, 6, 0x0300 or index, language, bytes) == size) { "Short USB string descriptor" }
+        return bytes
+    }
     fun currentAlternate(number: Int): Int {
         require(number in 0..255)
         synchronized(lock) { check(number in claimed) { "GET_INTERFACE requires an explicitly claimed interface $number" } }
