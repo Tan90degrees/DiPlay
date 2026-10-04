@@ -18,11 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DiagnosticReportTest {
     @Test fun cancelledProbeDoesNotOpenMediaOrCreateADecoder() {
         val messages = mutableListOf<String>()
-        val surface = android.view.Surface()
+        val texture = android.graphics.SurfaceTexture(0)
+        val surface = android.view.Surface(texture)
         try {
             DecoderProbe.run(RuntimeEnvironment.getApplication(), surface, AtomicBoolean(true), messages::add)
             assertEquals(listOf("H.264 测试已取消"), messages)
-        } finally { surface.release() }
+        } finally { surface.release(); texture.release() }
     }
     @Test fun logRetainsRecentMessagesWithinMemoryLimit() {
         val log = DiagnosticLog()
