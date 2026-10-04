@@ -77,6 +77,8 @@ class OfflineAndroidTest {
         fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
         try {
             val views = descendants(activity.get().window.decorView)
+            views.filterIsInstance<Button>().first { it.text == "USB 接口自测" }.performClick()
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
             views.filterIsInstance<Button>().first { it.text == "离线自测" }.performClick()
             val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
             dialog.listView.performItemClick(null, 2, 2)
@@ -88,6 +90,7 @@ class OfflineAndroidTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             assertEquals(View.GONE, overlay.visibility)
             assertTrue(DiagnosticReport.file(activity.get()).readText().contains("抬起/取消触点=2"))
+            assertTrue(DiagnosticReport.file(activity.get()).readText().contains("USB 接口自测需要连接一台 iPhone"))
         } finally { activity.destroy(); service.destroy() }
     }
     private fun MotionEvent.useEvent(body: (MotionEvent) -> Unit) { try { body(this) } finally { recycle() } }

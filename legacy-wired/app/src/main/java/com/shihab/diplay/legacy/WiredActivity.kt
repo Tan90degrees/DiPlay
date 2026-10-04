@@ -35,7 +35,8 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private var bound = false
     private var desired = false
     private var permissionDevice: String? = null
-    private var diagnoseAfterPermission = false
+    private enum class UsbDiagnostic { DESCRIPTORS, INTERFACES }
+    private var diagnosticAfterPermission: UsbDiagnostic? = null
     private var diagnosticCancellation: AtomicBoolean? = null
     @Volatile private var switching = false
     private var switchDevice: String? = null
@@ -60,10 +61,14 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
                     if (device?.deviceName != permissionDevice) return
                     permissionDevice = null
                     // Verify UsbManager's state rather than trusting extras from a broadcast.
-                    val pendingDiagnostic = diagnoseAfterPermission
-                    diagnoseAfterPermission = false
+                    val pendingDiagnostic = diagnosticAfterPermission
+                    diagnosticAfterPermission = null
                     if (device != null && manager.hasPermission(device)) {
-                        if (pendingDiagnostic) diagnose() else if (desired) scan()
+                        when (pendingDiagnostic) {
+                            UsbDiagnostic.DESCRIPTORS -> diagnose()
+                            UsbDiagnostic.INTERFACES -> probeUsbInterfaces()
+                            null -> if (desired) scan()
+                        }
                     } else { desired = false; report("USB 授权被拒绝，请重新点击连接或设备诊断") }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (desired) scan()
@@ -112,6 +117,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         button("连接") { begin() }
         button("停止/断开") { disconnect(); report("已停止；如正在测试或连接，请等待清理完成") }
         button("设备诊断") { diagnose() }
+        button("USB 接口自测") { probeUsbInterfaces() }
         button("H.264 测试") { probeDecoder() }
         button("离线自测") { showSelfTests() }
         button("日志") { showLog() }
@@ -185,7 +191,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         newController.start()
     }
     private fun disconnect() {
-        desired = false; switching = false; permissionDevice = null; diagnoseAfterPermission = false
+        desired = false; switching = false; permissionDevice = null; diagnosticAfterPermission = null
         diagnosticCancellation?.set(true)
         stopTouchProbe()
         ui.removeCallbacks(rescan)
@@ -198,7 +204,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         val phones = manager.deviceList.values.filter { it.vendorId == 0x05ac }
         val device = phones.singleOrNull()
         if (device != null && !manager.hasPermission(device)) {
-            diagnoseAfterPermission = true; usbPermission(device); return
+            diagnosticAfterPermission = UsbDiagnostic.DESCRIPTORS; usbPermission(device); return
         }
         diagnosticJob { cancelled ->
             report("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}；${Build.MANUFACTURER} / ${Build.MODEL}；ABI=${Build.CPU_ABI}")
@@ -243,6 +249,15 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private fun readyForProbe(): Boolean {
         if (busy || desired || touchTesting || permissionDevice != null) { report("请先停止并等待清理或 USB 授权，再执行自测"); return false }
         return true
+    }
+    private fun probeUsbInterfaces() {
+        if (!readyForProbe()) return
+        val phones = manager.deviceList.values.filter { it.vendorId == 0x05ac }
+        val device = phones.singleOrNull() ?: run { report("USB 接口自测需要连接一台 iPhone 到 USB Host 数据口"); return }
+        if (!manager.hasPermission(device)) {
+            diagnosticAfterPermission = UsbDiagnostic.INTERFACES; usbPermission(device); return
+        }
+        diagnosticJob { UsbInterfaceProbe.run(manager, device, it, ::report) }
     }
     private fun probeDecoder(rounds: Int = 1) {
         if (!readyForProbe()) return
