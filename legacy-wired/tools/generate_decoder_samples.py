@@ -19,3 +19,10 @@ for profile in ("baseline", "high"):
         str(output / f"probe_{profile}.mp4"),
     ], check=True)
     print(f"Generated {profile}: 800x480, 30 fps, 60 frames, no audio")
+subprocess.run([
+    args.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+    "-i", "sine=frequency=550:sample_rate=44100:duration=2", "-af", "volume=0.15",
+    "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+    "-map_metadata", "-1", "-movflags", "+faststart", str(output / "probe_aac.m4a"),
+], check=True)
+print("Generated AAC-LC: 44100 Hz stereo tone, 2 seconds")

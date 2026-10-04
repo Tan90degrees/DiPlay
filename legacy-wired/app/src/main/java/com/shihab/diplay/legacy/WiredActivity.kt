@@ -14,7 +14,6 @@ import android.net.VpnService
 import android.os.*
 import android.view.*
 import android.widget.*
-import com.shilapi.xcertplay.airplay.AirPlayContact
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -27,6 +26,8 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var sink: LegacyMediaSink
     private lateinit var manager: UsbManager
     private lateinit var view: SurfaceView
+    private lateinit var touchProbe: TouchProbeView
+    private var touchTesting = false
     private var vpn: WiredVpnService? = null
     private var controller: WiredController? = null
     private var busy = false
@@ -93,15 +94,12 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         view.holder.setFixedSize(800, 480)
         view.holder.addCallback(this)
         root.addView(view, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        touchProbe = TouchProbeView(this).apply { visibility = View.GONE }
+        root.addView(touchProbe, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         view.setOnTouchListener { _, event ->
-            val contacts = (0 until minOf(event.pointerCount, 2)).map { index ->
-                val released = event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL ||
-                    (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.actionIndex == index)
-                AirPlayContact(event.getPointerId(index), (event.getX(index) / view.width).toDouble().coerceIn(0.0, 1.0),
-                    (event.getY(index) / view.height).toDouble().coerceIn(0.0, 1.0), !released)
-            }
+            val contacts = TouchMapper.contacts(event, view.width, view.height)
             val target = controller
-            try { touches.execute { try { target?.touch(contacts) } catch (_: Exception) {} } }
+            try { if (target != null) touches.execute { try { target.touch(contacts) } catch (_: Exception) {} } }
             catch (_: java.util.concurrent.RejectedExecutionException) {
                 // Losing a release would leave a stuck finger: terminate this session instead.
                 disconnect(); report("触摸通道拥塞，连接已停止，请重新连接")
@@ -112,9 +110,10 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         val buttons = LinearLayout(this)
         fun button(text: String, action: () -> Unit) { buttons.addView(Button(this).apply { this.text = text; setOnClickListener { action() } }) }
         button("连接") { begin() }
-        button("断开") { disconnect(); report("已断开") }
+        button("停止/断开") { disconnect(); report("已停止；如正在测试或连接，请等待清理完成") }
         button("设备诊断") { diagnose() }
         button("H.264 测试") { probeDecoder() }
+        button("离线自测") { showSelfTests() }
         button("日志") { showLog() }
         button("重置配对") {
             if (busy) { report("请先断开，等待连接清理完成"); return@button }
@@ -134,7 +133,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         report("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}；USB 有线实验版，默认 800×480 / 30 fps")
     }
     private fun begin() {
-        if (busy) { report("连接运行或清理中，请稍候"); return }
+        if (busy || touchTesting) { report("连接或自测运行中，请先停止并等待清理"); return }
         if (permissionDevice != null) { report("请先完成 USB 授权，或点击断开取消"); return }
         val permission = VpnService.prepare(this)
         if (permission != null) startActivityForResult(permission, 19) else startConnection()
@@ -142,6 +141,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 19) { if (resultCode == RESULT_OK) startConnection() else report("USB 网络需要系统 VPN 授权") }
+        if (requestCode == 20) { if (resultCode == RESULT_OK) probeNetwork() else report("网络自测未获得系统 VPN 授权") }
     }
     private fun startConnection() {
         desired = true; switching = false; switches = 0
@@ -187,13 +187,14 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private fun disconnect() {
         desired = false; switching = false; permissionDevice = null; diagnoseAfterPermission = false
         diagnosticCancellation?.set(true)
+        stopTouchProbe()
         ui.removeCallbacks(rescan)
         controller?.close()
         touches.queue.clear()
         audioManager.abandonAudioFocus(focus)
     }
     private fun diagnose() {
-        if (busy || desired) { report("请先断开并等待清理，再执行设备诊断"); return }
+        if (!readyForProbe()) return
         val phones = manager.deviceList.values.filter { it.vendorId == 0x05ac }
         val device = phones.singleOrNull()
         if (device != null && !manager.hasPermission(device)) {
@@ -239,20 +240,67 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
             if (!cancelled.get()) report("设备诊断完成。点击 H.264 测试验证输出；日志可复制或分享。")
         }
     }
-    private fun probeDecoder() {
-        if (busy || desired) { report("请先断开并等待清理，再测试 H.264"); return }
+    private fun readyForProbe(): Boolean {
+        if (busy || desired || touchTesting || permissionDevice != null) { report("请先停止并等待清理或 USB 授权，再执行自测"); return false }
+        return true
+    }
+    private fun probeDecoder(rounds: Int = 1) {
+        if (!readyForProbe()) return
         val surface = view.holder.surface
         if (!surface.isValid) { report("显示 Surface 尚未准备好，请稍后重试"); return }
-        diagnosticJob { DecoderProbe.run(this, surface, it, ::report) }
+        diagnosticJob {
+            val before = Debug.getNativeHeapAllocatedSize()
+            DecoderProbe.run(this, surface, it, ::report, rounds)
+            report("视频测试内存参考：native 前=${before / 1024} KiB，后=${Debug.getNativeHeapAllocatedSize() / 1024} KiB；不包含全部 GPU/解码器内存")
+        }
+    }
+    private fun showSelfTests() {
+        val entries = arrayOf("视频持续 60 秒", "音频 PCM / AAC", if (touchTesting) "结束触控测试" else "触控单击 / 拖动 / 双指", "网络 TUN / IPv6")
+        AlertDialog.Builder(this).setTitle("无需 iPhone 的自测").setItems(entries) { _, index ->
+            when (index) {
+                0 -> probeDecoder(rounds = 15)
+                1 -> {
+                    if (readyForProbe()) {
+                        audioManager.requestAudioFocus(focus, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+                        diagnosticJob { AudioProbe.run(this, it, ::report) }
+                    }
+                }
+                2 -> {
+                    if (touchTesting) stopTouchProbe()
+                    else if (readyForProbe()) {
+                        touchProbe.reset(); touchTesting = true; touchProbe.visibility = View.VISIBLE
+                        report("触控自测已开始；请单击、拖动和双指操作，完成后点击停止/断开")
+                    }
+                }
+                3 -> {
+                    if (readyForProbe()) {
+                        val permission = VpnService.prepare(this)
+                        if (permission != null) startActivityForResult(permission, 20) else probeNetwork()
+                    }
+                }
+            }
+        }.setNegativeButton("关闭", null).show()
+    }
+    private fun stopTouchProbe() {
+        if (!touchTesting) return
+        touchTesting = false; touchProbe.visibility = View.GONE
+        report(touchProbe.summary()); ui.post { if (!destroyed) saveReport() }
+    }
+    private fun probeNetwork() {
+        if (!readyForProbe()) return
+        val service = vpn ?: run { report("VPN 服务尚未准备好，请稍后重试"); return }
+        diagnosticJob { service.probe(it, ::report) }
     }
     private fun diagnosticJob(body: (AtomicBoolean) -> Unit) {
         val cancelled = AtomicBoolean(false)
         diagnosticCancellation = cancelled; busy = true
         Thread({
             try { body(cancelled) }
-            catch (e: Exception) { report("诊断失败：${e.javaClass.simpleName}: ${e.message}") }
+            catch (e: Exception) { report(if (cancelled.get()) "自测已取消" else "诊断失败：${e.javaClass.simpleName}: ${e.message}") }
+            catch (e: LinkageError) { report("原生自测库不可用：${e.javaClass.simpleName}；确认安装 ARMv7 APK") }
             finally { ui.post {
                 if (diagnosticCancellation === cancelled) { diagnosticCancellation = null; busy = false }
+                audioManager.abandonAudioFocus(focus)
                 if (!destroyed) saveReport()
             } }
         }, "legacy-diagnostics").start()

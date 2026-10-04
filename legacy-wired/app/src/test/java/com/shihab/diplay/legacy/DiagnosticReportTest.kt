@@ -67,7 +67,7 @@ class DiagnosticReportTest {
     }
     @Test fun packagedDecoderSamplesHaveAnUncompressedFileDescriptor() {
         val context = RuntimeEnvironment.getApplication()
-        for (sample in listOf(R.raw.probe_baseline, R.raw.probe_high)) {
+        for (sample in listOf(R.raw.probe_baseline, R.raw.probe_high, R.raw.probe_aac)) {
             context.resources.openRawResourceFd(sample).use { assertTrue(it.length > 1000) }
         }
     }

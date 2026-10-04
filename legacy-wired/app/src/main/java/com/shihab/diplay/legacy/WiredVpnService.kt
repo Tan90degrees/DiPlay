@@ -21,16 +21,13 @@ class WiredVpnService : VpnService() {
     private val binder = LocalBinder()
     @Volatile private var bridge: TunBridge? = null
     @Volatile private var failureCallback: ((Throwable) -> Unit)? = null
+    @Volatile private var diagnosticCancellation: AtomicBoolean? = null
     override fun onBind(intent: Intent): IBinder? =
         if (intent.action == SERVICE_INTERFACE) super.onBind(intent) else binder
 
     @Synchronized fun connect(ncm: LegacyNcm, mac: ByteArray, failure: (Throwable) -> Unit): Closeable {
-        check(bridge == null) { "An NCM bridge is already running" }
-        val builder = Builder().setSession("DiPlay Wired").setMtu(1280)
-            .addAddress("fe80::2", 64).addRoute("fe80::", 64)
-        if (Build.VERSION.SDK_INT >= 21) builder.addAllowedApplication(packageName)
-        val tun = builder.establish()
-            ?: throw IOException("VPN permission was revoked")
+        check(bridge == null && diagnosticCancellation == null) { "A USB bridge or network probe is already running" }
+        val tun = tunnel("DiPlay Wired")
         try {
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
             val launch = PendingIntent.getActivity(this, 0, Intent(this, WiredActivity::class.java), flags)
@@ -50,11 +47,31 @@ class WiredVpnService : VpnService() {
             }
         } catch (e: Exception) { tun.close(); stopForeground(true); throw e }
     }
+    private fun tunnel(session: String): ParcelFileDescriptor {
+        val builder = Builder().setSession(session).setMtu(1280)
+            .addAddress("fe80::2", 64).addRoute("fe80::", 64)
+        if (Build.VERSION.SDK_INT >= 21) builder.addAllowedApplication(packageName)
+        return builder.establish() ?: throw IOException("VPN permission was revoked")
+    }
+    internal fun probe(cancelled: AtomicBoolean, report: (String) -> Unit) {
+        val tun = synchronized(this) {
+            check(bridge == null && diagnosticCancellation == null) { "VPN 正在使用中" }
+            if (cancelled.get()) return
+            tunnel("DiPlay 本机网络自测").also { diagnosticCancellation = cancelled }
+        }
+        try { tun.use { NetworkProbe.run(it, cancelled, report) } }
+        finally {
+            synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
+            report("网络自测 TUN 已关闭")
+        }
+    }
     override fun onRevoke() {
+        diagnosticCancellation?.set(true) // The probe worker owns and closes its fd after native IO returns.
         failureCallback?.invoke(IOException("系统撤销了 USB VPN 授权"))
         bridge?.close(); bridge = null; failureCallback = null; stopForeground(true); super.onRevoke()
     }
     override fun onDestroy() {
+        diagnosticCancellation?.set(true)
         failureCallback?.invoke(IOException("USB VPN 服务已停止"))
         bridge?.close(); bridge = null; failureCallback = null; super.onDestroy()
     }

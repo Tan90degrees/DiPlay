@@ -12,8 +12,8 @@ android {
         applicationId = "com.shihab.diplay.legacy"
         minSdk = 19
         targetSdk = 28
-        versionCode = 2
-        versionName = "0.1.1-wired-experimental"
+        versionCode = 3
+        versionName = "0.1.2-wired-experimental"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild { ndkBuild { arguments += "APP_PLATFORM=android-19" } }
         multiDexEnabled = true
@@ -25,7 +25,7 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "1.8" }
-    androidResources { noCompress += "mp4" } // MediaExtractor receives a resource fd on API 19.
+    androidResources { noCompress += listOf("mp4", "m4a") } // MediaExtractor receives a resource fd on API 19.
     sourceSets {
         getByName("main") {
             java.srcDir(layout.buildDirectory.dir("generated/protocols"))

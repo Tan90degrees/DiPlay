@@ -12,10 +12,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Uses the same decoder selection and API-16 input arrays as the wired video backend. */
 internal object DecoderProbe {
-    fun run(context: Context, surface: Surface, cancelled: AtomicBoolean, report: (String) -> Unit) {
+    fun run(context: Context, surface: Surface, cancelled: AtomicBoolean, report: (String) -> Unit, rounds: Int = 1) {
+        require(rounds in 1..30)
         for ((resource, profile) in listOf(R.raw.probe_baseline to "Baseline", R.raw.probe_high to "High")) {
             if (cancelled.get() || !surface.isValid) { report("H.264 测试已取消"); return }
-            try { decode(context, resource, profile, surface, cancelled, report) }
+            try { decode(context, resource, profile, surface, cancelled, report, rounds) }
             catch (e: Exception) {
                 if (cancelled.get() || !surface.isValid) { report("H.264 测试已取消"); return }
                 report("H.264 $profile 测试失败：${e.javaClass.simpleName}: ${e.message}")
@@ -26,7 +27,7 @@ internal object DecoderProbe {
     }
 
     private fun decode(context: Context, resource: Int, profile: String, surface: Surface,
-        cancelled: AtomicBoolean, report: (String) -> Unit) {
+        cancelled: AtomicBoolean, report: (String) -> Unit, rounds: Int) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         var started = false
@@ -51,20 +52,26 @@ internal object DecoderProbe {
             val timestamps = mutableSetOf<Long>()
             var inputEnded = false
             var outputEnded = false
+            var round = 0
             var playbackStart = -1L
             while (!outputEnded) {
                 if (cancelled.get() || !surface.isValid) return
-                check(SystemClock.elapsedRealtime() - begin < 10_000) { "解码超时：输入=$submitted，输出=$rendered" }
+                check(SystemClock.elapsedRealtime() - begin < rounds * 2_000L + 8_000) { "解码超时：输入=$submitted，输出=$rendered" }
                 if (!inputEnded) {
                     val index = decoder.dequeueInputBuffer(5_000)
                     if (index >= 0) {
                         val buffer = inputs[index].apply { clear() }
-                        val count = extractor.readSampleData(buffer, 0)
+                        var count = extractor.readSampleData(buffer, 0)
+                        if (count < 0 && round + 1 < rounds) {
+                            round++
+                            extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                            buffer.clear(); count = extractor.readSampleData(buffer, 0)
+                        }
                         if (count < 0) {
                             decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputEnded = true
                         } else {
-                            val timestamp = extractor.sampleTime
+                            val timestamp = extractor.sampleTime + round * 2_000_000L
                             decoder.queueInputBuffer(index, 0, count, timestamp, 0)
                             timestamps.add(timestamp)
                             submitted++; extractor.advance()
@@ -86,11 +93,14 @@ internal object DecoderProbe {
                     }
                     val display = frame && !cancelled.get() && surface.isValid
                     decoder.releaseOutputBuffer(index, display)
-                    if (display) rendered++
+                    if (display) {
+                        rendered++
+                        if (rounds > 1 && rendered % 300 == 0) report("H.264 $profile 持续测试：$rendered/${60 * rounds} 帧")
+                    }
                 } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) report("H.264 $profile 输出格式：${decoder.outputFormat}")
             }
             if (cancelled.get() || !surface.isValid) return
-            check(submitted == 60 && rendered == submitted) { "帧数不完整：输入=$submitted，输出=$rendered" }
+            check(submitted == 60 * rounds && rendered == submitted) { "帧数不完整：输入=$submitted，输出=$rendered" }
             report("H.264 $profile 完成：输入=$submitted，Surface 输出=$rendered，耗时=${SystemClock.elapsedRealtime() - begin} ms；请目视确认画面")
         } finally {
             codec?.let { if (started) try { it.stop() } catch (_: Exception) {}; try { it.release() } catch (_: Exception) {} }

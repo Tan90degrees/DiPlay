@@ -16,6 +16,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
 
 /** Keeps a valid H.264 reference chain after queue overflow or surface loss. */
 internal class VideoFrameQueue(private val capacity: Int = 8, private val byteLimit: Int = 2 * 1024 * 1024) {
@@ -160,13 +161,25 @@ private class VideoOutput(private val status: (String) -> Unit) : Closeable {
     override fun close() { closed.set(true) }
 }
 
-private class AudioOutput(private val format: AudioFormat, private val status: (String) -> Unit) : Closeable {
+internal class AudioOutput(private val format: AudioFormat, private val status: (String) -> Unit,
+    private val volume: Float? = null) : Closeable {
     private val closed = AtomicBoolean(false)
+    private val inputFinished = AtomicBoolean(false)
+    private val finished = CountDownLatch(1)
+    @Volatile var bytesWritten = 0L
+        private set
+    @Volatile var failure: String? = null
+        private set
     private val packets = ArrayBlockingQueue<ByteArray>(48)
     private val worker = Thread(::run, "legacy-audio-${format.audioType}").apply { start() }
-    fun offer(bytes: ByteArray) {
-        if (!closed.get() && !packets.offer(bytes)) { packets.clear(); packets.offer(bytes) }
+    fun offer(bytes: ByteArray): Boolean {
+        if (closed.get() || inputFinished.get()) return false
+        if (packets.offer(bytes)) return true
+        packets.clear(); packets.offer(bytes)
+        return false
     }
+    fun finishInput() { inputFinished.set(true) }
+    fun awaitClosed(timeoutMillis: Long) = finished.await(timeoutMillis, TimeUnit.MILLISECONDS)
     private fun run() {
         var track: AudioTrack? = null
         var codec: MediaCodec? = null
@@ -178,6 +191,7 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
             track = AudioTrack(AudioManager.STREAM_MUSIC, format.sampleRate, channels,
                 android.media.AudioFormat.ENCODING_PCM_16BIT, maxOf(minimum * 2, format.sampleRate * format.channels / 10), AudioTrack.MODE_STREAM)
             check(track.state == AudioTrack.STATE_INITIALIZED)
+            volume?.let { track.setStereoVolume(it.coerceIn(0f, 1f), it.coerceIn(0f, 1f)) }
             track.play()
             if (format.codec == AudioCodecKind.AAC_LC) {
                 val aac = MediaFormat.createAudioFormat("audio/mp4a-latm", format.sampleRate, format.channels).apply {
@@ -193,13 +207,15 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
             val info = MediaCodec.BufferInfo()
             var timestamp = 0L
             var pending: ByteArray? = null
-            while (!closed.get()) {
+            var endQueued = false
+            playback@ while (!closed.get()) {
                 if (pending == null) pending = packets.poll(10, TimeUnit.MILLISECONDS)
                 if (codec == null) {
                     pending?.let { pcm ->
                         for (i in 0 until pcm.size - 1 step 2) { val first = pcm[i]; pcm[i] = pcm[i + 1]; pcm[i + 1] = first }
                         write(track, pcm); pending = null
                     }
+                    if (pending == null && inputFinished.get() && packets.isEmpty()) break
                 } else {
                     pending?.let { payload ->
                         val index = codec.dequeueInputBuffer(1000)
@@ -213,6 +229,13 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
                             pending = null
                         }
                     }
+                    if (inputFinished.get() && !endQueued && pending == null && packets.isEmpty()) {
+                        val index = codec.dequeueInputBuffer(1000)
+                        if (index >= 0) {
+                            codec.queueInputBuffer(index, 0, 0, timestamp, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            endQueued = true
+                        }
+                    }
                     while (!closed.get()) {
                         val index = codec.dequeueOutputBuffer(info, 0)
                         if (index >= 0) {
@@ -221,6 +244,7 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
                             val pcm = ByteArray(info.size); output.get(pcm)
                             codec.releaseOutputBuffer(index, false)
                             write(track, pcm)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break@playback
                         } else if (index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) outputs = codec.outputBuffers
                         else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                             check(codec.outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE) == format.sampleRate &&
@@ -229,10 +253,17 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
                     }
                 }
             }
-        } catch (e: Exception) { if (!closed.get()) status("音频输出失败：${e.message}") }
+            if (inputFinished.get() && !closed.get()) {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                val frames = bytesWritten / (format.channels * 2)
+                while (!closed.get() && (track.playbackHeadPosition.toLong() and 0xffffffffL) < frames && System.nanoTime() < deadline) Thread.sleep(10)
+            }
+        } catch (e: Exception) { if (!closed.get()) { failure = e.message ?: e.javaClass.simpleName; status("音频输出失败：$failure") } }
         finally {
-            codec?.let { try { it.stop() } catch (_: Exception) {}; it.release() }
-            track?.let { try { it.stop() } catch (_: Exception) {}; it.release() }
+            try {
+                codec?.let { try { it.stop() } catch (_: Exception) {}; try { it.release() } catch (_: Exception) {} }
+                track?.let { try { it.stop() } catch (_: Exception) {}; try { it.release() } catch (_: Exception) {} }
+            } finally { finished.countDown() }
         }
     }
     private fun write(track: AudioTrack, pcm: ByteArray) {
@@ -242,6 +273,7 @@ private class AudioOutput(private val format: AudioFormat, private val status: (
             val count = track.write(pcm, offset, minOf(pcm.size - offset, 2048))
             check(count > 0) { "AudioTrack.write=$count" }
             offset += count
+            bytesWritten += count
         }
     }
     override fun close() { closed.set(true); packets.clear() }

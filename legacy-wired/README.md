@@ -89,9 +89,28 @@ adb shell run-as com.shihab.diplay.legacy cat files/wired-diagnostics.txt
 ```
 
 报告只保留最近一次保存的内容，卸载会清除；连接失败后先打开「日志」刷新报告再导出。
+CI 使用临时调试签名，不同构建的签名可能不同。更新安装若提示
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`，先导出报告，再卸载旧测试包后安装。
+卸载会清除本地配对和诊断记录；带认证的安装请使用自己保管的固定签名配置。
 如需重新生成原始测试图案，用支持 libx264 的 FFmpeg 执行
 `python tools/generate_decoder_samples.py /path/to/ffmpeg`。片段为自行生成的测试图案，
 没有外部视频、个人信息或认证材料。
+
+## 无需 iPhone 的离线自测（0.1.2）
+
+控制栏新增「离线自测」，与连接、USB 诊断和短视频测试互斥。可随时点
+「停止/断开」取消，离开前台也会停止；等待清理完成后再启动另一项或连接手机。
+
+| 自测 | 操作与报告 | 验证范围 |
+| --- | --- | --- |
+| 视频持续 60 秒 | Baseline、High 各 30 秒，复用同一解码器连续送入循环片段；每种预期输入/输出 900 帧，记录 native 内存前后值 | 解码与显示的短时持续运行；内存值不包含全部 GPU/解码器占用，不证明长期稳定或真实 CarPlay 延迟 |
+| 音频 PCM / AAC | 44100 Hz 立体声；先左声道 440 Hz、右声道 660 Hz，再双声道 AAC 550 Hz；使用较低测试电平，记录 AudioTrack 写入字节 | 复用有线版的 PCM 字节序转换、AAC/ADTS 解码与旧 AudioTrack 后端；写入成功还需听音确认 |
+| 触控单击 / 拖动 / 双指 | 网格、触点 ID、归一化坐标和 DOWN/UP 状态；结束时记录事件、最大触点与抬起数 | 与连接共用坐标转换；不验证手机端实际接收或响应 |
+| 网络 TUN / IPv6 | 同意系统 VPN 授权，临时建立与有线路径相同的 fe80::2/64 TUN；读取 5 个本机 UDP 测试包并注入带校验和的 IPv6 回包，结束后关闭 TUN | 授权、TUN fd 的 native poll/read/write、接口作用域、IPv6 UDP 内核回包；不经过 USB/NCM 或 iPhone |
+
+音频测试前把车机音量调到适中。网络自测可能替换正在使用的其他 VPN，测试前结束其他 VPN；
+只添加链路本地 IPv6 路由，不配置默认路由或 DNS。停止后日志应出现「网络自测 TUN 已关闭」。
+所有自测均不需要认证资产，也不执行 root 命令。
 
 ## 尚需设备验证的项目
 
@@ -114,5 +133,7 @@ adb shell run-as com.shihab.diplay.legacy cat files/wired-diagnostics.txt
 队列内存上限与关键帧恢复、PCM/AAC 的能力声明、原有 `/info` 回归、
 API 19 / 21 启动销毁、认证缺失时拒绝连接、私有身份持久化、
 有界日志、报告读写及分享 provider 的私有路径隔离。
+新增触控 ID/抬起/坐标边界、PCM 排队结束与清理、离线测试取消、
+无手机触控自测的前后台切换，以及独立 IPv6/UDP 校验和向量、奇数长度与损坏包检查。
 Robolectric 使用 JVM 和 Android 模拟框架，不测试 native usbfs、真实 Dalvik、GPU 或 iPhone。
 最终装机记录才用于判断这台 T3 是否已经实现可用的有线 CarPlay。
