@@ -52,9 +52,12 @@ cleanup() {
 trap cleanup 0
 trap 'exit 0' 1 2 15
 owner_pid=$$
-# Explicit fd redirection prevents a background shell substituting /dev/null.
-(while IFS= read -r keepalive; do :; done; kill -TERM "$owner_pid" 2>/dev/null) <&0 &
+# Preserve stdin before the asynchronous shell applies its /dev/null default.
+# A separate descriptor is required by dash and old noninteractive shells.
+exec 3<&0
+(while IFS= read -r keepalive; do :; done; kill -TERM "$owner_pid" 2>/dev/null) <&3 &
 guard=$!
+exec 3<&-
 clock
 end_time=$((now + max_seconds))
 echo DIPLAY_HELPER_WAITING_FOR_APP
