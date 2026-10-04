@@ -30,7 +30,7 @@ class WiredVpnService : VpnService() {
         report: (String) -> Unit, failure: (Throwable) -> Unit): Closeable {
         check(bridge == null && diagnosticCancellation == null) { "A USB bridge or network probe is already running" }
         val tun = tunnel("DiPlay Wired")
-        var rootRule: Closeable? = null
+        var rootRule: RootRuleLease? = null
         try {
             val network = NetworkEnvironment.interfaceForTun(tun.fd)
             NetworkEnvironment.report(this, network, report)
@@ -71,7 +71,7 @@ class WiredVpnService : VpnService() {
             val network = NetworkEnvironment.interfaceForTun(it.fd)
             NetworkEnvironment.report(this, network, report)
             val rootRule = if (NetworkCompatibilitySettings.enabled(this)) RootIpv6Compatibility.open(network.name, cancelled, report) else null
-            try { NetworkProbe.run(it, network, cancelled, report) } finally { rootRule?.close() }
+            try { NetworkProbe.run(it, network, cancelled, report) { rootRule?.checkActive() } } finally { rootRule?.close() }
         } }
         finally {
             synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
@@ -95,7 +95,7 @@ internal class TunBridge(
     private val ncm: LegacyNcm,
     private val hostMac: ByteArray,
     val network: NetworkInterface,
-    private val rootRule: Closeable?,
+    private val rootRule: RootRuleLease?,
     private val failure: (Throwable) -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
@@ -104,6 +104,7 @@ internal class TunBridge(
     private val threads = listOf(worker("legacy-tun-out") {
         val buffer = ByteArray(16384)
         while (!closed.get()) {
+            rootRule?.checkActive()
             val count = NativeUsbIo.tunRead(tun.fd, buffer, 250)
             if (count == -11 || count == -4) continue
             if (count <= 0) throw IOException("TUN read failed ($count)")
@@ -119,6 +120,7 @@ internal class TunBridge(
         }
     }, worker("legacy-tun-in") {
         while (!closed.get()) {
+            rootRule?.checkActive()
             val frame = ncm.recv(250) ?: continue
             val parsed = EthernetIpv6Codec.parseIpv6(frame) ?: continue
             if (parsed.ipv6.size !in 40..1500 || (parsed.ipv6[0].toInt() ushr 4 and 15) != 6) continue

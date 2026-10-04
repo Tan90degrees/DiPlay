@@ -61,7 +61,7 @@ internal object RootIpv6Compatibility {
         """.trimIndent()
     }
 
-    fun open(iface: String, cancelled: AtomicBoolean, report: (String) -> Unit): Closeable {
+    fun open(iface: String, cancelled: AtomicBoolean, report: (String) -> Unit): RootRuleLease {
         check(Build.VERSION.SDK_INT < 21) { "Root IPv6 兼容仅面向 Android 4.4" }
         check(!cancelled.get()) { "Root 网络设置已取消" }
         val tag = "diplay_" + UUID.randomUUID().toString().replace("-", "")
@@ -70,7 +70,7 @@ internal object RootIpv6Compatibility {
         try {
             report("Root IPv6：请允许 su；仅为本应用 UID=${Process.myUid()}、$iface、fe80::/64 建立临时例外")
             when (lease.awaitReady(cancelled)) {
-                READY -> report("Root IPv6：临时规则已建立，继续测试；这尚不能证明 EPERM 已解决")
+                READY -> { lease.checkActive(); report("Root IPv6：临时规则已建立，继续测试；这尚不能证明 EPERM 已解决") }
                 NOT_NEEDED -> report("Root IPv6：未发现 KitKat REJECT 规则，未修改防火墙")
                 else -> error("Root IPv6 未就绪")
             }
@@ -113,6 +113,12 @@ internal class RootRuleLease(private val process: java.lang.Process, private val
             if (done.get() && messages.isEmpty()) error("su 被拒绝或不支持当前规则；未确认 Root 网络设置")
         }
         error(if (cancelled.get()) "Root 网络设置已取消" else "等待 su 授权超时，请授权后重试")
+    }
+    fun checkActive() {
+        if (!installed.get()) return // No REJECT branch: no rule was needed.
+        check(!closed.get() && !removed.get() && !done.get()) { "Root 临时规则租约已结束，请重新授权并自测" }
+        try { process.exitValue() } catch (_: IllegalThreadStateException) { return }
+        error("su 未保持临时规则的输入管道，Root 租约已失效")
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

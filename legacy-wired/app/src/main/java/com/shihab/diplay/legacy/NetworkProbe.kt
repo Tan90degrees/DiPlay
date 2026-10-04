@@ -51,7 +51,8 @@ internal object ProbeUdpPacket {
 }
 
 internal object NetworkProbe {
-    fun run(tun: ParcelFileDescriptor, network: NetworkInterface, cancelled: AtomicBoolean, report: (String) -> Unit) {
+    fun run(tun: ParcelFileDescriptor, network: NetworkInterface, cancelled: AtomicBoolean,
+        report: (String) -> Unit, checkCompatibility: () -> Unit = {}) {
         if (cancelled.get()) return
         val local = InetAddress.getByName("fe80::2")
         val peer = InetAddress.getByName("fe80::1")
@@ -65,6 +66,7 @@ internal object NetworkProbe {
             repeat(5) { sequence ->
                 if (cancelled.get()) return
                 val payload = "DiPlay-offline-$sequence".toByteArray(Charsets.UTF_8)
+                checkCompatibility()
                 try { socket.send(DatagramPacket(payload, payload.size, scopedPeer, 47019)) }
                 catch (e: SocketException) {
                     if (e.message?.contains("EPERM") == true) report("IPv6 sendto 被系统拒绝；KitKat VPN 的 IPv6 REJECT 是候选原因。可在网络兼容中主动启用 Root 自测；TUN 读写尚未验证")

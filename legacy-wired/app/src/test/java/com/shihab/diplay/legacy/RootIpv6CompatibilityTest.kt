@@ -56,6 +56,7 @@ class RootIpv6CompatibilityTest {
         val messages = mutableListOf<String>()
         val lease = RootRuleLease(process, messages::add)
         assertEquals(RootIpv6Compatibility.READY, lease.awaitReady(AtomicBoolean(false)))
+        lease.checkActive()
         lease.close(); lease.close()
         val calls = log.readLines()
         assertEquals(2, calls.size)
@@ -63,6 +64,13 @@ class RootIpv6CompatibilityTest {
         assertTrue(calls[1].contains("-D st_filter_OUTPUT"))
         assertTrue(calls.all { it.contains(tag) && it.contains("--uid-owner 10123") })
         assertEquals(listOf("Root IPv6：临时规则已删除"), messages)
+    }
+    @Test(timeout = 10000) fun closedLeaseCannotBeUsedForMoreTraffic() = fixture { process, _ ->
+        val lease = RootRuleLease(process, {})
+        assertEquals(RootIpv6Compatibility.READY, lease.awaitReady(AtomicBoolean(false)))
+        lease.close()
+        try { lease.checkActive(); fail("Accepted expired lease") }
+        catch (e: IllegalStateException) { assertTrue(e.message!!.contains("租约已结束")) }
     }
     @Test(timeout = 10000) fun parentPipeEofRemovesRuleWithoutJavaCleanup() = fixture { process, log ->
         assertEquals(RootIpv6Compatibility.READY, process.inputStream.bufferedReader().readLine())
