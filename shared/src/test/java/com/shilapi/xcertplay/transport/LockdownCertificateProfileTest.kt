@@ -1,7 +1,15 @@
 package com.shilapi.xcertplay.transport
 
 import org.bouncycastle.asn1.x509.BasicConstraints
-import org.bouncycastle.asn1.x509.Certificate
+import org.bouncycastle.asn1.ASN1BitString
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.ASN1Sequence
+import org.bouncycastle.asn1.ASN1TaggedObject
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.Extensions
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.asn1.x509.Time
 import org.bouncycastle.asn1.x509.Extension
 import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.asn1.x509.SubjectKeyIdentifier
@@ -19,6 +27,31 @@ import java.time.Instant
 import java.util.Base64
 
 class LockdownCertificateProfileTest {
+    // Lockdown intentionally uses empty DNs. Inspect ASN.1 fields directly: newer BC's
+    // PKIX Certificate wrapper rejects that protocol profile before exposing its fields.
+    // This changes no production parsing policy and sets no global/provider overrides.
+    private class Certificate private constructor(der: ByteArray) {
+        private val outer = ASN1Sequence.getInstance(der)
+        val tbsCertificate = ASN1Sequence.getInstance(outer.getObjectAt(0))
+        val signatureAlgorithm = AlgorithmIdentifier.getInstance(outer.getObjectAt(1))
+        val signature = ASN1BitString.getInstance(outer.getObjectAt(2))
+        val versionNumber = ASN1Integer.getInstance(tbsCertificate.getObjectAt(0) as ASN1TaggedObject, true).value.toInt() + 1
+        val serialNumber = ASN1Integer.getInstance(tbsCertificate.getObjectAt(1))
+        val issuer = X500Name.getInstance(tbsCertificate.getObjectAt(3))
+        private val validity = ASN1Sequence.getInstance(tbsCertificate.getObjectAt(4))
+        val startDate = Time.getInstance(validity.getObjectAt(0))
+        val endDate = Time.getInstance(validity.getObjectAt(1))
+        val subject = X500Name.getInstance(tbsCertificate.getObjectAt(5))
+        val subjectPublicKeyInfo = SubjectPublicKeyInfo.getInstance(tbsCertificate.getObjectAt(6))
+        val extensions = Extensions.getInstance(ASN1Sequence.getInstance(tbsCertificate.getObjectAt(7) as ASN1TaggedObject, true))
+        init {
+            assertEquals(3, outer.size()); assertEquals(8, tbsCertificate.size())
+            assertEquals(2, validity.size())
+            assertEquals(signatureAlgorithm, AlgorithmIdentifier.getInstance(tbsCertificate.getObjectAt(2)))
+            assertArrayEquals(der, outer.encoded)
+        }
+        companion object { fun getInstance(der: ByteArray) = Certificate(der) }
+    }
     private fun der(pem: ByteArray): ByteArray = Base64.getDecoder().decode(
         pem.toString(Charsets.US_ASCII).lineSequence().filterNot { it.startsWith("-----") }.joinToString(""),
     )
@@ -46,18 +79,18 @@ class LockdownCertificateProfileTest {
                 verifier.initVerify(rootPublic); verifier.update(cert.tbsCertificate.encoded)
                 assertTrue(verifier.verify(cert.signature.bytes))
             }
-            assertTrue(BasicConstraints.fromExtensions(root.tbsCertificate.extensions).isCA)
+            assertTrue(BasicConstraints.fromExtensions(root.extensions).isCA)
             for (leaf in listOf(host, phone)) {
-                assertFalse(BasicConstraints.fromExtensions(leaf.tbsCertificate.extensions).isCA)
-                assertTrue(leaf.tbsCertificate.extensions.getExtension(Extension.basicConstraints).isCritical)
-                assertTrue(leaf.tbsCertificate.extensions.getExtension(Extension.keyUsage).isCritical)
-                assertTrue(KeyUsage.fromExtensions(leaf.tbsCertificate.extensions)
+                assertFalse(BasicConstraints.fromExtensions(leaf.extensions).isCA)
+                assertTrue(leaf.extensions.getExtension(Extension.basicConstraints).isCritical)
+                assertTrue(leaf.extensions.getExtension(Extension.keyUsage).isCritical)
+                assertTrue(KeyUsage.fromExtensions(leaf.extensions)
                     .hasUsages(KeyUsage.digitalSignature or KeyUsage.keyEncipherment))
             }
             assertArrayEquals(device.encoded, phone.subjectPublicKeyInfo.encoded)
             assertArrayEquals(MessageDigest.getInstance("SHA-1").digest(phone.subjectPublicKeyInfo.publicKeyData.bytes),
-                SubjectKeyIdentifier.fromExtensions(phone.tbsCertificate.extensions).keyIdentifier)
-            assertNull(host.tbsCertificate.extensions.getExtension(Extension.subjectKeyIdentifier))
+                SubjectKeyIdentifier.fromExtensions(phone.extensions).keyIdentifier)
+            assertNull(host.extensions.getExtension(Extension.subjectKeyIdentifier))
             for ((keyPem, certificate) in listOf(record.rootPrivateKeyPem to root, record.hostPrivateKeyPem to host)) {
                 val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(der(keyPem)))
                 val message = byteArrayOf(1, 2, 3)
