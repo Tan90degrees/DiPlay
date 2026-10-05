@@ -51,6 +51,7 @@ If a problem remains, reproduce it on **0.2.12**, then use **Settings → Diagno
 on an external router. See the guide for setup, build requirements and the
 BYD DiLink 4.0 / Android 10 clean-install validation result.
 
+- [Experimental Android 4.4 / 5.x wired fork](legacy-wired/README.md) — separate API 19 / ARMv7 build for the Allwinner T3; hardware validation pending, source-only APK has no authentication identity.
 - [Install and connect](docs/INSTALL.md)
 - [Compatibility and troubleshooting](docs/COMPATIBILITY.md)
 - [Privacy and diagnostic reports](docs/PRIVACY.md)

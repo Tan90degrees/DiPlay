@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.transport
 
 import android.annotation.SuppressLint
+import android.os.Build
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.security.GeneralSecurityException
@@ -40,7 +41,7 @@ object LockdownTlsEngineFactory {
                 load(null, password)
                 setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
             }
-            val keyManagers = KeyManagerFactory.getInstance("PKIX").apply {
+            val keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
                 init(keyStore, password)
             }.keyManagers
             val context = SSLContext.getInstance("TLS").apply {
@@ -48,7 +49,14 @@ object LockdownTlsEngineFactory {
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
                 useClientMode = true
-                sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = null }
+                if (Build.VERSION.SDK_INT >= 24) {
+                    sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = null }
+                }
+                // KitKat may enable only TLS 1.0 by default. Enable its supported TLS 1.2 too.
+                if (Build.VERSION.SDK_INT < 21) {
+                    enabledProtocols = listOf("TLSv1.2", "TLSv1.1", "TLSv1")
+                        .filter { it in supportedProtocols }.toTypedArray()
+                }
             }
         } finally {
             password.fill('\u0000')

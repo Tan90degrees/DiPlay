@@ -156,7 +156,7 @@ class Iap2WiredControlClient(
                 val availability = Iap2CarPlayMessages.availability(payload).wired
                 val available = availability?.available
                 val transport = availability?.identifier
-                "iap2 4300 wiredAvailable=$available usbTransport=${transport ?: "none"}"
+                "iap2 4300 wiredAvailable=$available usbTransportPresent=${transport != null}"
             } catch (error: RuntimeException) {
                 "iap2 4300 decode failed: ${error.message}"
             }

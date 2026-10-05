@@ -147,7 +147,7 @@ class CarPlayMediaEngine(
 
         val capture = audioCaptureDirectory?.let { AudioPacketCapture(it, type) }
         if (capture != null) audioCaptures[streamKey] = capture
-        val audio = AudioStream(key, type, session::logDebug)
+        val audio = AudioStream(key, type, session::logDebug, bindAddress = session.transportBindAddress)
         val (dataPort, controlPort) = audio.listen(
             object : AudioStream.Listener {
                 override fun onStarted(firstSample: Int) {

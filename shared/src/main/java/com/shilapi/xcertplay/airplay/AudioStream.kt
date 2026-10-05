@@ -30,6 +30,7 @@ class AudioStream(
     private val key: ByteArray,
     private val streamType: Int = -1,
     private val onDiagnostic: (String) -> Unit = {},
+    private val bindAddress: InetAddress? = null,
 ) : Closeable {
     interface Listener {
         fun onStarted(firstSample: Int) {}
@@ -185,7 +186,7 @@ class AudioStream(
     private fun bindAnyPort(): DatagramSocket {
         val socket = DatagramSocket(null)
         socket.reuseAddress = true
-        socket.bind(InetSocketAddress(InetAddress.getByName("::"), 0))
+        socket.bind(InetSocketAddress(bindAddress ?: InetAddress.getByName("::"), 0))
         return socket
     }
 

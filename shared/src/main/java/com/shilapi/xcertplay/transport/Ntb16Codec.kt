@@ -56,17 +56,22 @@ object Ntb16Codec {
         require(offset >= 0 && length >= 0 && offset <= block.size - length) {
             "NTB16 range is outside the source buffer"
         }
-        val end = offset + length
         if (length < NTH_LENGTH || readU32(block, offset) != NTH16_SIG) return emptyList()
+        val headerLength = readU16(block, offset + 4)
+        val blockLength = readU16(block, offset + 8)
+        if (headerLength < NTH_LENGTH || headerLength > blockLength || blockLength > length) return emptyList()
+        val end = offset + blockLength
 
         val datagrams = ArrayList<ByteArray>(1)
         var ndpOffset = offset + readU16(block, offset + 10)
-        var hops = 0
-        val maxHops = maxOf(1, length / 4)
-        while (ndpOffset != 0 && hops < maxHops) {
-            if (ndpOffset < offset || ndpOffset + 12 > end) break
-            if (readU32(block, ndpOffset) and 0x00ffffff != NDP16_SIG and 0x00ffffff) break
+        val tables = mutableSetOf<Int>()
+        var copiedBytes = 0
+        while (ndpOffset != 0 && tables.add(ndpOffset)) {
+            if (ndpOffset < offset + headerLength || ndpOffset + 12 > end) break
+            // NCM1 carries a CRC trailer; this codec implements only NCM0, without CRC.
+            if (readU32(block, ndpOffset) != NDP16_SIG) break
             val ndpLength = readU16(block, ndpOffset + 4)
+            if (ndpLength < 12 || ndpLength % 4 != 0 || ndpOffset + ndpLength > end) break
             val nextNdp = readU16(block, ndpOffset + 6)
             var entry = ndpOffset + 8
             val ndpEnd = minOf(ndpOffset + ndpLength, end)
@@ -76,13 +81,15 @@ object Ntb16Codec {
                 if (datagramIndex == 0 || datagramLength == 0) break
                 val datagramStart = offset + datagramIndex
                 val datagramEnd = datagramStart + datagramLength
-                if (datagramStart >= offset && datagramStart <= end && datagramEnd <= end) {
+                if (datagramStart >= offset + headerLength && datagramStart <= end && datagramEnd <= end) {
+                    // Hostile repeated/overlapping entries cannot amplify a 64 KiB transfer into GBs.
+                    if (datagrams.size >= 256 || datagramLength > blockLength - copiedBytes) return datagrams
                     datagrams.add(block.copyOfRange(datagramStart, datagramEnd))
+                    copiedBytes += datagramLength
                 }
                 entry += 4
             }
             ndpOffset = if (nextNdp == 0) 0 else offset + nextNdp
-            hops++
         }
         return datagrams
     }

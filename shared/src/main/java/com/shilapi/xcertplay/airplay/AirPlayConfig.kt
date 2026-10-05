@@ -51,4 +51,8 @@ data class AirPlayConfig(
     val icons: List<AirPlayIcon> = emptyList(),
     /** iOS 27 video in car (see [VideoInCar]); video plays only while [VideoInCar.allowed]. */
     val videoInCar: Boolean = false,
+    /** Advertise Opus only when the host has a decoder; older Android builds can offer PCM. */
+    val opus: Boolean = true,
+    /** Legacy endpoint translation needs every channel bound to the control socket's address. */
+    val bindTransportToControlAddress: Boolean = false,
 )
