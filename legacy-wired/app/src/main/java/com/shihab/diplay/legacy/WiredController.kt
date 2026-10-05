@@ -64,6 +64,7 @@ class WiredController(
         }
         val identityStore = LegacyIdentity(context)
         val mfi = identityStore.mfi() // Fail before claiming pipes if credentials are unavailable.
+        status("本地认证身份已加载，证书/密钥与签名自检通过；iPhone 是否接受仍需验证")
         val identity = identityStore.identity()
         val function = checkNotNull(config.ncmFunction)
         val fallbackMac = byteArrayOf(2) + identity.publicKey.copyOf(5)

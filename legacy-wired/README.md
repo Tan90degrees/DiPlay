@@ -37,8 +37,11 @@ GitHub Actions 的 **Legacy wired Android 4.4** 工作流也执行上述检查�
 ### 认证输入
 
 **源码测试 APK 不含认证身份，可以检查 USB 和解码器，不能独立完成 CarPlay 认证。**
-连接需要自行配置有效、匹配的认证证书和私钥。文件匹配不代表 iPhone 信任该证书。
-本工程不创建或获取认证身份，也不使用缺省／伪造身份。
+内置身份实机包会自动加载其证书和私钥，不需要 Root、认证服务器或用户手动导入。
+文件匹配只证明本地签名一致性，不代表 iPhone 信任该证书。
+上游公开发布 APK 内置了来自公开 Carlinkit 固件的实验身份；来源及尚未解决的
+持续有效性/分发适用性见 [上游第三方说明](https://github.com/shihabal3amri/DiPlay/blob/main/docs/THIRD_PARTY_NOTICES.md)。
+源码和公共 CI 构建仍不含这两个文件，也不提供伪造身份。
 
 需要带入认证时，在仓库之外准备仅含下列两个文件的目录：
 
@@ -56,6 +59,32 @@ DIPLAY_AUTH_ASSETS_DIR=/absolute/private/assets ./gradlew :app:assembleStandalon
 文件必须各自为 1–16384 字节。运行时校验证书、密钥和签名匹配。
 带认证的 APK 包含私钥，须自行保管；不要上传到公开仓库、PR、日志或公开构建产物。
 私有配对记录保存在应用 `filesDir` / 私有 SharedPreferences 中，禁用系统备份。
+
+若已取得经过测试的源码 APK，也可用 `tools/package_standalone.py` 本地打包这两个外部资产。
+它验证 P-256 证书/密钥匹配及预哈希签名，使用官方 SDK zipalign/apksigner 对齐并进行
+API 19 所需的 v1（同时保留 v2）签名，然后逐项比较 manifest、DEX、原生库和资源
+与源码 APK 完全相同。此方式无需再次安装 NDK；需要 Python `cryptography`、Java、
+SDK build-tools 和自行保管的 PKCS12 Android 签名密钥：
+
+```sh
+python tools/package_standalone.py --source-apk /private/app-debug.apk \
+  --assets /private/runtime-assets --output /private/DiPlay-Wired-Legacy-standalone.apk \
+  --java /tools/java --zipalign /sdk/build-tools/34.0.0/zipalign \
+  --apksigner-jar /sdk/build-tools/34.0.0/lib/apksigner.jar \
+  --keystore /private/local-signing.p12 --password-file /private/signing-password.txt \
+  --alias local-signing
+```
+
+本地实机包使用持久保存的本地 Android 签名密钥，与 CI 临时诊断包可能不同。
+若覆盖安装提示签名冲突，需先卸载旧诊断版；卸载会清除旧配对和授权，新包需要重新授权。
+后续使用同一本地签名密钥的实机包可正常升级。
+
+### 0.1.11：更新上游基线与内置身份实机打包
+
+适配分支已 rebase 到 `main` 的 `2fc876e`（上游 0.2.12）。保留全部 28 个适配提交，
+README 冲突同时保留上游 Same LAN 说明与 legacy 入口。公共 CI 仍生成源码诊断包；
+本地实机包选用上游 `v0.2.12` 发布 APK 的两项实验资产，并校验下载摘要与资产匹配。
+连接日志新增本地身份加载/签名自检阶段；只有后续 iPhone 认证和影音实测才能证明可用。
 
 ## T3 车机第一次测试
 
