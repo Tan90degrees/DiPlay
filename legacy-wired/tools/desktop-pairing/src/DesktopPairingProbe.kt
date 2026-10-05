@@ -1,6 +1,9 @@
 package com.shilapi.xcertplay.transport
 
 import org.w3c.dom.Element
+import com.shilapi.xcertplay.iap2.session.Iap2Session
+import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import java.io.ByteArrayInputStream
 import java.io.EOFException
 import java.io.File
@@ -35,15 +38,15 @@ private class AppleMux {
             require(status in 0..1)
             return if (status == 1) null else data
         }
-        fun write(bytes: ByteArray) {
+        @Synchronized fun write(bytes: ByteArray) {
             output.writeByte(1); output.writeInt(bytes.size); output.write(bytes); output.flush()
             answer()
         }
-        fun read(count: Int): ByteArray? {
+        @Synchronized fun read(count: Int): ByteArray? {
             output.writeByte(2); output.writeInt(count); output.writeInt(timeout.toInt()); output.flush()
             return answer()
         }
-        override fun close() {
+        @Synchronized override fun close() {
             try { output.writeByte(3); output.flush() } catch (_: IOException) { }
             output.close(); input.close()
             if (!process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly()
@@ -122,7 +125,7 @@ private class AppleMux {
 
 fun main(args: Array<String>) {
     val mode = args.firstOrNull() ?: "--inspect"
-    require(mode in listOf("--inspect", "--pair", "--self-test"))
+    require(mode in listOf("--inspect", "--pair", "--session", "--iap2", "--self-test"))
     if (mode == "--self-test") {
         val keys = java.security.KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
         val public = keys.public as java.security.interfaces.RSAPublicKey
@@ -168,14 +171,88 @@ fun main(args: Array<String>) {
                 }
             }
             if (mode == "--inspect") return
+            val directory = File(args.getOrNull(1) ?: ".private/verification/desktop-pairing")
+            if (mode == "--session" || mode == "--iap2") {
+                // Host-JDK compatibility only: unchanged shared factory calls CertificateFactory.
+                // BC 1.79 accepts the empty issuer profile already accepted by the real Pair.
+                val provider = Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider")
+                    .getDeclaredConstructor().newInstance() as java.security.Provider
+                java.security.Security.insertProviderAt(provider, 1)
+                val tlsProvider = Class.forName("org.bouncycastle.jsse.provider.BouncyCastleJsseProvider")
+                    .getDeclaredConstructor(java.security.Provider::class.java).newInstance(provider) as java.security.Provider
+                java.security.Security.insertProviderAt(tlsProvider, 2)
+                // Limit BC provider logging to errors; never emit TLS payloads or certificate details.
+                java.util.logging.Logger.getLogger("org.bouncycastle").level = java.util.logging.Level.SEVERE
+                println("Desktop TLS uses BC/BCJSSE 1.79 for Lockdown's empty-issuer profile (not Android's provider).")
+                val properties = Properties().apply {
+                    File(directory, "pair-record.properties").inputStream().use { load(it) }
+                }
+                fun pem(name: String) = Base64.getDecoder().decode(properties.getProperty(name)
+                    ?: error("Private pairing record lacks $name; run pair first"))
+                val record = LockdownPairRecord.restore(
+                    properties.getProperty("HostID"), properties.getProperty("SystemBUID"),
+                    // Older probe records omitted this field; TLS/service startup does not use it.
+                    properties.getProperty("WiFiAddress", "unused-by-desktop-tls"),
+                    pem("DevicePublicKey"), pem("DeviceCertificate"), pem("HostPrivateKey"),
+                    pem("HostCertificate"), pem("RootPrivateKey"), pem("RootCertificate"),
+                )
+                println("Reusing the private record previously accepted by Pair; no new identity is generated.")
+                LockdownPlistChannel(host.connect()).use { plaintext ->
+                    val response = plaintext.request(LockdownPlistValue.Dictionary(mapOf(
+                        "Request" to LockdownPlistValue.Text("StartSession"),
+                        "HostID" to LockdownPlistValue.Text(record.hostId),
+                        "SystemBUID" to LockdownPlistValue.Text(record.systemBuid),
+                    )))
+                    check(response.entries["Error"] == null) { "StartSession rejected the saved record" }
+                    check(response.entries["EnableSessionSSL"] == LockdownPlistValue.Boolean(true))
+                    println("Real StartSession accepted the persisted record; starting shared TLS handshake.")
+                    LockdownPlistChannel(TlsDuplexChannel.open(plaintext.detach(), record)).use { secure ->
+                        val query = secure.request(LockdownPlistValue.Dictionary(mapOf(
+                            "Request" to LockdownPlistValue.Text("QueryType"),
+                        )))
+                        check(query.entries["Type"] == LockdownPlistValue.Text("com.apple.mobile.lockdown"))
+                        println("Real TLS handshake and encrypted Lockdown QueryType roundtrip passed.")
+                        val session = response.entries["SessionID"] ?: error("StartSession omitted SessionID")
+                        val stop = secure.request(LockdownPlistValue.Dictionary(mapOf(
+                            "Request" to LockdownPlistValue.Text("StopSession"), "SessionID" to session,
+                        )))
+                        check(stop.entries["Error"] == null) { "StopSession failed" }
+                        println("TLS session stopped and closed.")
+                    }
+                }
+                println("Opening real CarKit service with the shared LockdownCarKitClient.")
+                LockdownCarKitClient(host).open(record, "DiPlayLegacy").use { stream ->
+                    println("Real CarKit service startup and port connection passed.")
+                    if (mode == "--iap2") {
+                        val assets = File(args.getOrNull(2) ?: error("iap2 requires private offline-mfi directory"))
+                        val authentication = LocalMfiAuthenticationClient.load(assets)
+                        println("Private accessory certificate/key consistency self-check passed; starting shared iAP2.")
+                        Iap2Session.open(stream, traceContext = "desktop-wired",
+                            onTrace = { println(it.substringBefore('\n')) }).use { session ->
+                            check(session.awaitReady(15_000)) { "Real iAP2 link negotiation timed out" }
+                            println("Real iAP2 link negotiation passed.")
+                            Iap2IdentificationClient(session).identify(Iap2IdentificationConfig(
+                                "DiPlay Wired", "LegacyWired", "DiPlay", "DiPlayDesktopProbe",
+                                "0.1.12-wired-experimental", "ARMv7", carPlayUsbInterfaceNumber = 3,
+                            ), 30_000)
+                            println("Real iAP2 identification accepted (advertised NCM interface 3; desktop does not open NCM).")
+                            Iap2MfiAuthenticationClient(authentication).run(session, 30_000, ::println)
+                            println("Real iPhone sent MFi AuthenticationSucceeded for the locally packaged experimental identity.")
+                        }
+                    }
+                }
+                println(if (mode == "--iap2") "NCM and complete CarPlay media are not tested by this probe."
+                    else "iAP2/MFi/NCM/CarPlay are not tested by session mode.")
+                return
+            }
             val hostId = UUID.randomUUID().toString().uppercase(java.util.Locale.US)
             val buid = UUID.randomUUID().toString().uppercase(java.util.Locale.US)
             val paired = LockdownPairingClient(host, ::println).pair("DiPlayLegacy", hostId, buid, 120_000)
-            val directory = File(args.getOrNull(1) ?: ".private/verification/desktop-pairing")
             check(directory.mkdirs() || directory.isDirectory)
             val properties = Properties().apply {
                 setProperty("HostID", hostId); setProperty("SystemBUID", buid)
                 val record = paired.pairRecord
+                setProperty("WiFiAddress", record.wifiMacAddress)
                 for ((name, bytes) in mapOf("HostPrivateKey" to record.hostPrivateKeyPem,
                     "RootPrivateKey" to record.rootPrivateKeyPem, "HostCertificate" to record.hostCertificatePem,
                     "RootCertificate" to record.rootCertificatePem, "DeviceCertificate" to record.deviceCertificatePem,
@@ -197,6 +274,13 @@ fun main(args: Array<String>) {
         }
     } catch (e: Exception) {
         System.err.println("Desktop probe failed: ${e.javaClass.simpleName}: ${e.message?.take(200)}")
+        var cause = e.cause
+        repeat(5) {
+            cause?.let {
+                System.err.println("Cause: ${it.javaClass.simpleName}: ${it.message?.take(160)}")
+                cause = it.cause
+            }
+        }
         exitProcess(1)
     }
 }
