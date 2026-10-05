@@ -27,6 +27,13 @@ android {
     }
     kotlinOptions { jvmTarget = "1.8" }
     androidResources { noCompress += listOf("mp4", "m4a") } // MediaExtractor receives a resource fd on API 19.
+    packaging {
+        resources {
+            // OSGi manifests are for desktop module loading; companion BC jars duplicate them.
+            excludes += "META-INF/versions/**/OSGI-INF/MANIFEST.MF"
+            merges += "META-INF/services/java.security.Provider"
+        }
+    }
     sourceSets {
         getByName("main") {
             java.srcDir(layout.buildDirectory.dir("generated/protocols"))
