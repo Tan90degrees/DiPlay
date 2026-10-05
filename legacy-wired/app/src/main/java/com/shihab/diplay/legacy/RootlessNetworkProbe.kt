@@ -31,7 +31,8 @@ internal object RootlessNetworkProbe {
                 if (cancelled.get()) return
                 val payload = ByteArray(payloadSize) { (it * 31 + sequence).toByte() }
                 socket.send(DatagramPacket(payload, payload.size, peer, 47019))
-                val packet = read(tun, translator, cancelled, peerFragments) {
+                report("免 Root 网络自测：UDP 已发送 ${sequence + 1}/5；负载=$payloadSize 字节")
+                val packet = read(tun, translator, cancelled, peerFragments, "UDP ${sequence + 1}/5", report) {
                     it[6] == 17.toByte() && it.size == 48 + payload.size && RootlessIp.u16(it, 42) == 47019 &&
                         it.copyOfRange(48, it.size).contentEquals(payload)
                 } ?: return
@@ -65,7 +66,7 @@ internal object RootlessNetworkProbe {
             fun matching(packet: ByteArray) = packet.size >= 60 && packet[6] == 6.toByte() &&
                 RootlessIp.u16(packet, 40) == server.localPort && RootlessIp.u16(packet, 42) == clientPort
             inject(tcp(1000, 0, 2))
-            val synAck = read(tun, translator, cancelled, peerFragments) { matching(it) && it[53].toInt() and 0x12 == 0x12 } ?: return
+            val synAck = read(tun, translator, cancelled, peerFragments, "TCP SYN/ACK", report) { matching(it) && it[53].toInt() and 0x12 == 0x12 } ?: return
             check(u32(synAck, 48) == 1001L) { "TCP SYN/ACK 序号不匹配" }
             val serverSequence = u32(synAck, 44) + 1
             val payload = "DiPlay-TCP-echo".toByteArray(Charsets.US_ASCII)
@@ -79,7 +80,7 @@ internal object RootlessNetworkProbe {
                 }
                 check(received.contentEquals(payload)) { "TCP 自测内容不匹配" }
                 socket.getOutputStream().write(payload); socket.getOutputStream().flush()
-                val echoed = read(tun, translator, cancelled, peerFragments) {
+                val echoed = read(tun, translator, cancelled, peerFragments, "TCP echo", report) {
                     if (!matching(it)) false else {
                         val start = 40 + (it[52].toInt() ushr 4 and 15) * 4
                         start <= it.size && it.copyOfRange(start, it.size).contentEquals(payload)
@@ -92,24 +93,32 @@ internal object RootlessNetworkProbe {
         if (!cancelled.get()) report("免 Root 网络自测通过：UDP 5/5、TCP 双向回包；USB NCM、认证和 CarPlay 仍需实测")
     }
     private fun read(tun: ParcelFileDescriptor, translator: RootlessTranslator, cancelled: AtomicBoolean, fragments: IpFragmentBuffer,
-        match: (ByteArray) -> Boolean): ByteArray? {
+        phase: String, report: (String) -> Unit, match: (ByteArray) -> Boolean): ByteArray? {
         val buffer = ByteArray(16384); val deadline = SystemClock.elapsedRealtime() + 3000
-        while (!cancelled.get() && SystemClock.elapsedRealtime() < deadline) {
-            val size = NativeUsbIo.tunRead(tun.fd, buffer, 250)
-            if (size == -11 || size == -4) continue
-            check(size > 0) { "免 Root TUN 读取失败：$size" }
-            for (packet in translator.toIpv6(buffer.copyOf(size))) {
-                val complete = if (packet[6] != 44.toByte()) packet else {
-                    val field = RootlessIp.u16(packet, 42)
-                    val key = packet.copyOfRange(44, 48).joinToString(",")
-                    val payload = fragments.offer(key, field and 0xfff8, field and 1 != 0, packet.copyOfRange(48, packet.size)) ?: continue
-                    RootlessIp.ipv6(packet.copyOfRange(8, 24), packet.copyOfRange(24, 40), packet[40].toInt() and 255, payload)
+        val stats = ProbeReadStats(phase, report)
+        try {
+            while (!cancelled.get() && SystemClock.elapsedRealtime() < deadline) {
+                val size = NativeUsbIo.tunRead(tun.fd, buffer, 250)
+                if (size == -11 || size == -4) continue
+                check(size > 0) { "免 Root TUN 读取失败：$size" }
+                val raw = buffer.copyOf(size)
+                stats.raw(raw)
+                val translated = translator.toIpv6(raw)
+                stats.translated(translated.size)
+                for (packet in translated) {
+                    val complete = if (packet[6] != 44.toByte()) packet else {
+                        val field = RootlessIp.u16(packet, 42)
+                        val key = packet.copyOfRange(44, 48).joinToString(",")
+                        val payload = fragments.offer(key, field and 0xfff8, field and 1 != 0, packet.copyOfRange(48, packet.size)) ?: continue
+                        RootlessIp.ipv6(packet.copyOfRange(8, 24), packet.copyOfRange(24, 40), packet[40].toInt() and 255, payload)
+                    }
+                    stats.complete()
+                    if (match(complete)) { stats.matched = true; return complete }
                 }
-                if (match(complete)) return complete
             }
-        }
-        if (cancelled.get()) return null
-        error("免 Root TUN 未读到预期回包，请导出网络环境日志")
+            if (cancelled.get()) return null
+            error("免 Root 自测 [$phase]：${stats.failure()}")
+        } finally { stats.finish() }
     }
     private fun u32(bytes: ByteArray, offset: Int) =
         (0..3).fold(0L) { value, index -> (value shl 8) or (bytes[offset + index].toLong() and 255) }

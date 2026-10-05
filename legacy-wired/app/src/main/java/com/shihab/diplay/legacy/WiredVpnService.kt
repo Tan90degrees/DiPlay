@@ -30,9 +30,11 @@ class WiredVpnService : VpnService() {
         report: (String) -> Unit, failure: (Throwable) -> Unit): Closeable {
         check(bridge == null && diagnosticCancellation == null) { "A USB bridge or network probe is already running" }
         val tun = tunnel("DiPlay Wired")
+        var routing: Closeable? = null
         try {
             val network = NetworkEnvironment.interfaceForTun(tun.fd)
             NetworkEnvironment.report(this, network, report)
+            routing = selectNetwork(network, cancelled, report)
             check(!cancelled.get()) { "USB 网络设置已取消" }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
             val launch = PendingIntent.getActivity(this, 0, Intent(this, WiredActivity::class.java), flags)
@@ -41,7 +43,7 @@ class WiredVpnService : VpnService() {
                 .setContentTitle("DiPlay 有线连接").setContentText("USB IPv6 通道运行中")
                 .setContentIntent(launch).setOngoing(true).build()
             startForeground(19, notification)
-            val instance = TunBridge(tun, ncm, mac, network, report, failure)
+            val instance = TunBridge(tun, ncm, mac, network, checkNotNull(routing), report, failure)
             bridge = instance
             failureCallback = failure
             instance.start()
@@ -50,7 +52,12 @@ class WiredVpnService : VpnService() {
                 instance.awaitClosed() // Controller cleanup worker; prevent stale fe80::2 on reconnect.
                 synchronized(this) { if (bridge === instance) { bridge = null; failureCallback = null; stopForeground(true) } }
             }
-        } catch (e: Exception) { tun.close(); stopForeground(true); throw e }
+        } catch (e: Exception) {
+            try { routing?.close() }
+            catch (cleanup: Exception) { e.addSuppressed(cleanup); report("VPN 网络选择清理失败：${cleanup.message}") }
+            finally { tun.close(); stopForeground(true) }
+            throw e
+        }
     }
     fun activeInterface(): NetworkInterface = checkNotNull(bridge) { "USB VPN 尚未建立" }.network
     fun localAddress(): java.net.InetAddress = java.net.InetAddress.getByName(RootlessIp.HOST4)
@@ -63,6 +70,12 @@ class WiredVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= 21) builder.addAllowedApplication(packageName)
         return builder.establish() ?: throw IOException("VPN permission was revoked")
     }
+    private fun selectNetwork(network: NetworkInterface, cancelled: AtomicBoolean, report: (String) -> Unit): Closeable =
+        if (Build.VERSION.SDK_INT >= 21) VpnNetworkBinding.acquire(this, network.name, cancelled, report)
+        else {
+            report("VPN 网络选择：API 19 使用系统 UID 路由；自测会报告原始 TUN 包数")
+            Closeable { }
+        }
     internal fun probe(cancelled: AtomicBoolean, report: (String) -> Unit) {
         val tun = synchronized(this) {
             check(bridge == null && diagnosticCancellation == null) { "VPN 正在使用中" }
@@ -72,7 +85,7 @@ class WiredVpnService : VpnService() {
         try { tun.use {
             val network = NetworkEnvironment.interfaceForTun(it.fd)
             NetworkEnvironment.report(this, network, report)
-            RootlessNetworkProbe.run(it, cancelled, report)
+            selectNetwork(network, cancelled, report).use { RootlessNetworkProbe.run(it, cancelled, report) }
         } }
         finally {
             synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
@@ -96,6 +109,7 @@ internal class TunBridge(
     private val ncm: LegacyNcm,
     private val hostMac: ByteArray,
     val network: NetworkInterface,
+    private val routing: Closeable,
     private val report: (String) -> Unit,
     private val failure: (Throwable) -> Unit,
 ) : Closeable {
@@ -153,7 +167,11 @@ internal class TunBridge(
                 threads.forEach { if (it !== Thread.currentThread()) it.join() }
                 report("USB 网络统计：入站=${incoming.get()}，出站=${outgoing.get()}，暂缓=${deferred.get()}，启动前超时=${preStartTimeouts.get()}")
                 tun.close()
-            } finally { finished.countDown() }
+            } finally {
+                try { routing.close() }
+                catch (e: Exception) { report("VPN 网络选择清理失败：${e.message}") }
+                finally { finished.countDown() }
+            }
         }, "legacy-tun-cleanup").start()
     }
     fun awaitClosed() = finished.await()

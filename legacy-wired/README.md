@@ -2,7 +2,7 @@
 
 这个独立 Gradle 工程面向 Android **4.4.2 / API 19、ARMv7** 老车机，首个目标设备为
 Allwinner T3、四核 Cortex-A7、1 GB RAM、1024×600 屏幕。最低版本为 API 19，
-也在 API 21 / 22 的模拟框架中检查网络配置。**T3 真机已验证解码、音频和 USB 接口操作；0.1.8 免 Root 网络与完整连接尚未验证**。
+也在 API 21 / 22 的模拟框架中检查网络配置。**T3 真机已验证解码、音频和 USB 接口操作；0.1.9 免 Root 网络与完整连接尚未验证**。
 构建、API lint 或启动测试通过，不等于硬件 USB、认证或解码已成功。
 
 应用标识为 `com.shihab.diplay.legacy`，可以与现有 DiPlay 并存。此工程单独使用
@@ -243,7 +243,7 @@ USB 原生单次传输上限仍为 16 KiB。
 自测中的 IPv6 peer 是本机测试数据：UDP/TCP 使用真实 Android Socket 与授权 TUN fd，
 IPv6 回包由应用生成再转换回 IPv4，不打开 iPhone USB，不进行认证。
 它能验证这台 ROM 的免 Root IPv4 通路，不能替代实际 NCM、认证与完整 CarPlay 会话。
-0.1.8 尚需实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
+当前版本尚需实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
 
 ### 0.1.8：Android 5.1 也使用免 Root 转换
 
@@ -257,6 +257,28 @@ IPv6 回包由应用生成再转换回 IPv4，不打开 iPhone USB，不进行�
 API 19、21、22 回归测试检查真实 Builder 调用的 IPv4 地址、唯一 /24 路由、MTU 与应用范围。
 没有自动退回 Root 或修改系统规则。复测应显示“模式=免 Root IPv4/IPv6 转换”、
 IPv4 UDP bind、UDP 5/5、TCP 双向回包和 TUN 已关闭。无需连接 iPhone。
+
+### 0.1.9：等待并选择本次 VPN 网络，分阶段统计 TUN
+
+同一 Samsung SM-P600 / API 22 的 0.1.8 报告显示 IPv4 UDP bind 与发送成功，
+3 秒后读取超时且 TUN 关闭。旧报告没有记录原始包数，因此不能确认流量是否进入 TUN，
+也不能排除转换校验或预期包匹配失败。这个结果不证明厂商已拒绝免 Root IPv4。
+
+Android 5 起，创建接口与绑定本地地址不能替代 Android 的网络选择。
+0.1.9 最多等待 5 秒，从可见网络中检查 VPN 类型、当前接口名、198.18.0.2/24 地址和
+198.18.0.0/24 路由，选择唯一匹配网络，然后为当前应用进程设置网络绑定。
+参考 [ConnectivityManager 的进程网络绑定 API](https://developer.android.com/reference/android/net/ConnectivityManager#setProcessDefaultNetwork(android.net.Network))。
+它作用于之后新建的 Socket，因此连接、自测和媒体通道共用这个范围；不绑定 Wi-Fi/其他 VPN，
+不请求 INTERNET 默认路由或 DNS，不修改系统网络规则。新增 ACCESS_NETWORK_STATE 是普通权限。
+API 19 不加载 API 21 的 Network 类型，继续使用系统 UID 路由并输出相同 TUN 统计。
+
+结束自测、连接清理完成或设置失败后恢复原进程绑定；旧网络失效时清除本次绑定，
+若绑定已被其他代码改变则保留新选择。USB 桥先停止 IO，再释放网络选择。
+日志应出现“VPN 网络选择：已绑定本次 …”、每个 UDP/TCP 阶段的原始/转换/完整/匹配数，
+以及“VPN 网络选择已恢复”和“TUN 已关闭”。若原始=0，排查路由/网络选择；
+原始>0 且转换=0，检查首包格式/校验或分片；完整>0 且匹配=false，检查自测协议匹配。
+首包摘要仅保留长度、协议、分片字段及校验结果，不输出有效载荷。
+这次修复针对缺失的网络选择与诊断，是否解决这台 ROM 的超时仍需 0.1.9 实测。
 
 | 环节 | 实现与验证边界 |
 | --- | --- |
