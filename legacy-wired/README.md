@@ -309,6 +309,29 @@ MUX 1/0、NCM 控制 2/0、NCM 数据 3/1 的占用与读回；随后释放接�
 这项结论来自用户的实机确认；不补写未提供的分片计数、耗时或清理细节。
 下一阶段验证真实 USB bulk/NCM、有效外部认证及完整 CarPlay 会话。
 
+### 0.1.10：无需认证身份的 USB 数据自测
+
+新增「USB 数据自测」：复用已验证的配置/接口事务，在真实 MUX bulk 端点上执行
+USBMUX v2 握手、连接 Lockdown TCP 62078，再发送一次只读 `QueryType` 并校验
+`Type=com.apple.mobile.lockdown`。它复用实际连接使用的 USBMUX 和 plist 实现，
+不访问认证资产、不配对、不启动会话或服务，不记录手机标识或响应有效载荷。
+QueryType 的请求/响应格式参考
+[libimobiledevice 的 Lockdown 实现](https://github.com/libimobiledevice/libimobiledevice/blob/master/src/lockdown.c)。
+
+实机步骤：
+
+1. 安装新 APK，解锁并有线连接 iPhone，允许 USB 授权。
+2. 点击「USB 数据自测」。若提示尚无 CarPlay 配置，先点击「连接」触发模式切换；
+   出现缺少认证身份后点「停止/断开」，等待清理，再点击「USB 数据自测」。
+3. 观察 USBMUX、TCP、QueryType 三个阶段及 bulk IN/OUT 字节数。
+4. 只有数据通道关闭、接口释放、原配置/驱动恢复及最终读回全部通过，才报告
+   「USB 数据自测通过」。可连续运行两次验证重复打开与恢复；随后导出日志。
+
+数据阶段总时限 20 秒，每次 bulk 调用最多 250 ms；停止时阻止新 IO，等待在途 IO
+结束后才恢复配置，避免后台读线程与配置切换竞争。失败时记录所在阶段并执行恢复。
+成功仅证明 MUX bulk 与 Lockdown 的真实双向通信；没有发送 NCM 业务数据、
+执行 iAP2/MFi 认证或建立 CarPlay 会话。T3/SM-P600 已通过的免 Root 网络自测无需重做。
+
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |

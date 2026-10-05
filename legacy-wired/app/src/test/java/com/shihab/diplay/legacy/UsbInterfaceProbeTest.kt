@@ -160,4 +160,39 @@ class UsbInterfaceProbeTest {
         assertEquals(1, io.active)
         assertTrue(io.events.contains("reconnect"))
     }
+    @Test fun dataExerciseRunsWhileClaimedAndSuccessWaitsForRestoration() {
+        val io = io()
+        val messages = mutableListOf<String>()
+        UsbInterfaceProbe.run(io, AtomicBoolean(false), messages::add) { mux ->
+            assertEquals(5, io.active)
+            assertEquals(setOf(1, 2, 3), io.held)
+            assertEquals(1, mux.number)
+            assertFalse(messages.any { it.contains("自测通过") })
+            io.events += "exercise"
+        }
+        assertTrue(io.events.indexOf("exercise") < io.events.indexOf("release"))
+        assertEquals(1, io.active)
+        assertTrue(messages.last().startsWith("USB 数据自测通过"))
+    }
+    @Test fun failedDataExerciseStillRestoresWithoutReportingPass() {
+        val io = io()
+        val messages = mutableListOf<String>()
+        try {
+            UsbInterfaceProbe.run(io, AtomicBoolean(false), messages::add) { throw IOException("bulk failed") }
+            fail("Accepted bulk failure")
+        } catch (e: IOException) { assertEquals("bulk failed", e.message) }
+        assertEquals(1, io.active)
+        assertTrue(io.held.isEmpty())
+        assertTrue(io.events.contains("reconnect"))
+        assertFalse(messages.any { it.contains("自测通过") })
+    }
+    @Test fun dataSuccessDoesNotHideConfigurationRestorationFailure() {
+        val io = io().apply { failAt = "select:1" }
+        val messages = mutableListOf<String>()
+        try {
+            UsbInterfaceProbe.run(io, AtomicBoolean(false), messages::add) { }
+            fail("Accepted restore failure after bulk")
+        } catch (_: IOException) { }
+        assertFalse(messages.any { it.contains("自测通过") })
+    }
 }

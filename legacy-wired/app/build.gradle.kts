@@ -12,8 +12,8 @@ android {
         applicationId = "com.shihab.diplay.legacy"
         minSdk = 19
         targetSdk = 28
-        versionCode = 10
-        versionName = "0.1.9-wired-experimental"
+        versionCode = 11
+        versionName = "0.1.10-wired-experimental"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild { ndkBuild { arguments += "APP_PLATFORM=android-19" } }
         multiDexEnabled = true

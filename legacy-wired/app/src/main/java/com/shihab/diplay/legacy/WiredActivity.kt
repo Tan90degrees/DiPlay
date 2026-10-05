@@ -35,7 +35,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private var bound = false
     private var desired = false
     private var permissionDevice: String? = null
-    private enum class UsbDiagnostic { DESCRIPTORS, INTERFACES }
+    private enum class UsbDiagnostic { DESCRIPTORS, INTERFACES, DATA }
     private var diagnosticAfterPermission: UsbDiagnostic? = null
     private var diagnosticCancellation: AtomicBoolean? = null
     @Volatile private var switching = false
@@ -67,6 +67,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
                         when (pendingDiagnostic) {
                             UsbDiagnostic.DESCRIPTORS -> diagnose()
                             UsbDiagnostic.INTERFACES -> probeUsbInterfaces()
+                            UsbDiagnostic.DATA -> probeUsbInterfaces(dataProbe = true)
                             null -> if (desired) scan()
                         }
                     } else { desired = false; report("USB 授权被拒绝，请重新点击连接或设备诊断") }
@@ -118,6 +119,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         button("停止/断开") { disconnect(); report("已停止；如正在测试或连接，请等待清理完成") }
         button("设备诊断") { diagnose() }
         button("USB 接口自测") { probeUsbInterfaces() }
+        button("USB 数据自测") { probeUsbInterfaces(dataProbe = true) }
         button("H.264 测试") { probeDecoder() }
         button("离线自测") { showSelfTests() }
         button("网络说明") { showNetworkCompatibility() }
@@ -251,14 +253,15 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
         if (busy || desired || touchTesting || permissionDevice != null) { report("请先停止并等待清理或 USB 授权，再执行自测"); return false }
         return true
     }
-    private fun probeUsbInterfaces() {
+    private fun probeUsbInterfaces(dataProbe: Boolean = false) {
         if (!readyForProbe()) return
         val phones = manager.deviceList.values.filter { it.vendorId == 0x05ac }
         val device = phones.singleOrNull() ?: run { report("USB 接口自测需要连接一台 iPhone 到 USB Host 数据口"); return }
         if (!manager.hasPermission(device)) {
-            diagnosticAfterPermission = UsbDiagnostic.INTERFACES; usbPermission(device); return
+            diagnosticAfterPermission = if (dataProbe) UsbDiagnostic.DATA else UsbDiagnostic.INTERFACES
+            usbPermission(device); return
         }
-        diagnosticJob { UsbInterfaceProbe.run(manager, device, it, ::report) }
+        diagnosticJob { UsbInterfaceProbe.run(manager, device, it, ::report, dataProbe) }
     }
     private fun probeDecoder(rounds: Int = 1) {
         if (!readyForProbe()) return

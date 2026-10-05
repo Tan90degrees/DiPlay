@@ -19,7 +19,8 @@ internal interface UsbProbeIo {
 }
 
 internal object UsbInterfaceProbe {
-    fun run(manager: UsbManager, device: UsbDevice, cancelled: AtomicBoolean, report: (String) -> Unit) {
+    fun run(manager: UsbManager, device: UsbDevice, cancelled: AtomicBoolean, report: (String) -> Unit,
+            dataProbe: Boolean = false) {
         if (cancelled.get()) return
         check(manager.hasPermission(device)) { "USB 权限已失效" }
         val connection = checkNotNull(manager.openDevice(device)) { "USB openDevice 返回空" }
@@ -35,11 +36,12 @@ internal object UsbInterfaceProbe {
                 override fun alternate(number: Int, value: Int) { usb.setAlternate(number, value) }
                 override fun releaseClaims() { usb.releaseClaims(reconnect = false) }
                 override fun reconnectDrivers() { usb.reconnectDrivers() }
-            }, cancelled, report)
+            }, cancelled, report, if (dataProbe) ({ mux -> UsbDataProbe.run(usb, mux, cancelled, report) }) else null)
         } } finally { connection.close() }
     }
 
-    fun run(io: UsbProbeIo, cancelled: AtomicBoolean, report: (String) -> Unit) {
+    fun run(io: UsbProbeIo, cancelled: AtomicBoolean, report: (String) -> Unit,
+            exercise: ((UsbAlternate) -> Unit)? = null) {
         if (cancelled.get()) return
         val configs = io.configurations()
         val config = configs.firstOrNull { it.carPlay }
@@ -81,6 +83,8 @@ internal object UsbInterfaceProbe {
                 report("USB 接口自测：$name ${alternate.number}/${alternate.alternate} 占用与读回通过")
             }
             complete = !cancelled.get() && claimed.size == targets.size
+            if (complete) exercise?.invoke(checkNotNull(config.mux))
+            complete = complete && !cancelled.get()
         } catch (e: Exception) { failure = e }
         finally {
             fun cleanup(label: String, action: () -> Unit) {
@@ -111,6 +115,8 @@ internal object UsbInterfaceProbe {
             }
         }
         failure?.let { throw it }
-        report(if (complete) "USB 接口自测通过：配置、MUX/NCM 占用与 alternate；bulk 传输、认证和 CarPlay 仍需另测" else "USB 接口自测已取消，清理完成")
+        report(if (!complete) "USB 自测已取消，清理完成"
+            else if (exercise != null) "USB 数据自测通过：MUX bulk 双向收发、USBMUX v2、Lockdown QueryType、原状态恢复；NCM 数据、认证和 CarPlay 仍需另测"
+            else "USB 接口自测通过：配置、MUX/NCM 占用与 alternate；bulk 传输、认证和 CarPlay 仍需另测")
     }
 }
