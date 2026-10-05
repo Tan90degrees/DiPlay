@@ -82,10 +82,10 @@ class WiredVpnService : VpnService() {
             if (cancelled.get()) return
             tunnel("DiPlay 本机网络自测").also { diagnosticCancellation = cancelled }
         }
-        try { tun.use {
-            val network = NetworkEnvironment.interfaceForTun(it.fd)
+        try { tun.use { descriptor ->
+            val network = NetworkEnvironment.interfaceForTun(descriptor.fd)
             NetworkEnvironment.report(this, network, report)
-            selectNetwork(network, cancelled, report).use { RootlessNetworkProbe.run(it, cancelled, report) }
+            selectNetwork(network, cancelled, report).use { RootlessNetworkProbe.run(descriptor, cancelled, report) }
         } }
         finally {
             synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
