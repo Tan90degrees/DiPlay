@@ -89,7 +89,11 @@ internal class ProbeMuxPipe(
         val remaining = enter()
         try {
             return io.read(minOf(timeoutMillis, remaining, 250)).also { bytes ->
-                if (bytes != null && bytes.isNotEmpty()) synchronized(state) { readBytes += bytes.size; reads++ }
+                if (bytes != null && bytes.isNotEmpty()) synchronized(state) {
+                    readBytes += bytes.size; reads++
+                    // Bound unsolicited peer traffic before the shared TCP receive queue can grow.
+                    if (readBytes > 65_536) throw IphoneUsbException.Protocol("USB 数据自测接收量超过 64 KiB 上限")
+                }
             }
         } finally { leave() }
     }

@@ -50,6 +50,15 @@ class ProbeMuxPipeTest {
         pipe.close()
         assertEquals(0L, pipe.writtenBytes)
     }
+    @Test fun peerFloodIsStoppedBeforeItCanAccumulateInTcpQueues() {
+        val io = object : Io() { override fun read(timeoutMillis: Long) = ByteArray(16_384) }
+        val pipe = ProbeMuxPipe(io, AtomicBoolean(false))
+        repeat(4) { assertEquals(16_384, pipe.read(250)!!.size) }
+        try { pipe.read(250); fail("Accepted unbounded peer traffic") }
+        catch (_: IphoneUsbException.Protocol) { }
+        pipe.close()
+        assertFalse(io.closed)
+    }
     @Test(timeout = 5000) fun closeFencesInFlightReadBeforeOwnerCanRestoreConfiguration() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
