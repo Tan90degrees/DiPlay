@@ -24,7 +24,7 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0 ndk;25.2.9519653'
       - uses: gradle/actions/setup-gradle@v4
-      - name: API 19 and 21 tests, compatibility lint and ARMv7 APK
+      - name: API 19, 21 and 22 tests, compatibility lint and ARMv7 APK
         working-directory: legacy-wired
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
       - name: Diagnostic APK (no authentication identity)

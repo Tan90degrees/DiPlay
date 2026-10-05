@@ -311,7 +311,7 @@ class WiredActivity : Activity(), SurfaceHolder.Callback {
     private fun showNetworkCompatibility() {
         if (!readyForProbe()) return
         AlertDialog.Builder(this).setTitle("免 Root 有线网络")
-            .setMessage("连接和网络自测只需要 Android 系统 VPN 授权。\n\nAndroid 4.4 默认使用应用内网络转换。直接在本机运行网络自测，无需电脑辅助。请确认 UDP 5/5 和 TCP 双向回包；完整 CarPlay 仍需认证及手机连接验证。")
+            .setMessage("连接和网络自测只需要 Android 系统 VPN 授权。\n\nAndroid 4.4 / 5.x 均使用应用内网络转换。直接在本机运行网络自测，无需电脑辅助。请确认 UDP 5/5 和 TCP 双向回包；完整 CarPlay 仍需认证及手机连接验证。")
             .setPositiveButton("关闭", null).show()
     }
     private fun diagnosticJob(body: (AtomicBoolean) -> Unit) {

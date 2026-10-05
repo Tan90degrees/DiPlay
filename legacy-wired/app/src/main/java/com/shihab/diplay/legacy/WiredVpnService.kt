@@ -9,7 +9,6 @@ import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Build
-import com.shilapi.xcertplay.transport.EthernetIpv6Codec
 import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -54,13 +53,13 @@ class WiredVpnService : VpnService() {
         } catch (e: Exception) { tun.close(); stopForeground(true); throw e }
     }
     fun activeInterface(): NetworkInterface = checkNotNull(bridge) { "USB VPN 尚未建立" }.network
-    fun localAddress(): java.net.InetAddress = java.net.InetAddress.getByName(if (Build.VERSION.SDK_INT < 21) RootlessIp.HOST4 else RootlessIp.HOST6)
+    fun localAddress(): java.net.InetAddress = java.net.InetAddress.getByName(RootlessIp.HOST4)
     fun acceptsPeer(address: java.net.InetAddress): Boolean = bridge?.acceptsPeer(address) == true
     private fun tunnel(session: String): ParcelFileDescriptor {
         val builder = Builder().setSession(session)
-        if (Build.VERSION.SDK_INT < 21) {
-            builder.setMtu(RootlessIp.MTU4).addAddress(RootlessIp.HOST4, 24).addRoute(RootlessIp.PREFIX4, 24)
-        } else builder.setMtu(1280).addAddress("fe80::2", 64).addRoute("fe80::", 64)
+        // Older vendor ROMs can reject or fail to route link-local IPv6 even on Android 5.
+        // Keep the same IPv4 kernel path as API 19; USB-side IPv6 lives in the translator.
+        builder.setMtu(RootlessIp.MTU4).addAddress(RootlessIp.HOST4, 24).addRoute(RootlessIp.PREFIX4, 24)
         if (Build.VERSION.SDK_INT >= 21) builder.addAllowedApplication(packageName)
         return builder.establish() ?: throw IOException("VPN permission was revoked")
     }
@@ -73,8 +72,7 @@ class WiredVpnService : VpnService() {
         try { tun.use {
             val network = NetworkEnvironment.interfaceForTun(it.fd)
             NetworkEnvironment.report(this, network, report)
-            if (Build.VERSION.SDK_INT < 21) RootlessNetworkProbe.run(it, cancelled, report)
-            else NetworkProbe.run(it, network, cancelled, report)
+            RootlessNetworkProbe.run(it, cancelled, report)
         } }
         finally {
             synchronized(this) { if (diagnosticCancellation === cancelled) diagnosticCancellation = null }
@@ -103,9 +101,8 @@ internal class TunBridge(
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val finished = CountDownLatch(1)
-    private val ethernet = LegacyEthernetLink(hostMac)
-    private val rootless = if (Build.VERSION.SDK_INT < 21) RootlessEthernetLink(hostMac) else null
-    fun acceptsPeer(address: java.net.InetAddress) = rootless?.translator?.knownPeer(address.address) ?: address.isLinkLocalAddress
+    private val rootless = RootlessEthernetLink(hostMac)
+    fun acceptsPeer(address: java.net.InetAddress) = rootless.translator.knownPeer(address.address)
     private val incoming = AtomicLong()
     private val outgoing = AtomicLong()
     private val deferred = AtomicLong()
@@ -117,22 +114,20 @@ internal class TunBridge(
             if (count == -11 || count == -4) continue
             if (count <= 0) throw IOException("TUN read failed ($count)")
             val packet = buffer.copyOf(count)
-            val frames = rootless?.outgoing(packet) ?: listOfNotNull(ethernet.outgoing(packet))
+            val frames = rootless.outgoing(packet)
             if (frames.isEmpty()) { deferred.incrementAndGet(); continue }
             for (frame in frames) send(frame)
         }
     }, worker("legacy-tun-in") {
         while (!closed.get()) {
             val frame = ncm.recv(250) ?: continue
-            val packet = if (rootless != null) {
-                val received = rootless.incoming(frame)
-                received.replies.forEach(::send)
-                received.tun
-            } else ethernet.incoming(frame)
+            val received = rootless.incoming(frame)
+            received.replies.forEach(::send)
+            val packet = received.tun
             if (packet == null) { deferred.incrementAndGet(); continue }
             val count = NativeUsbIo.tunWrite(tun.fd, packet)
             if (count != packet.size) throw IOException("TUN write failed ($count)")
-            if (incoming.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 入站帧已注入 TUN")
+            if (incoming.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 入站帧已转换并注入 IPv4 TUN")
         }
     })
     private fun send(frame: ByteArray) {

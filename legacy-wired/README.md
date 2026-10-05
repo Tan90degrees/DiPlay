@@ -2,7 +2,7 @@
 
 这个独立 Gradle 工程面向 Android **4.4.2 / API 19、ARMv7** 老车机，首个目标设备为
 Allwinner T3、四核 Cortex-A7、1 GB RAM、1024×600 屏幕。最低版本为 API 19，
-也在 API 21 的模拟框架中检查启动。**T3 真机已验证解码、音频和 USB 接口操作；0.1.7 免 Root 网络与完整连接尚未验证**。
+也在 API 21 / 22 的模拟框架中检查网络配置。**T3 真机已验证解码、音频和 USB 接口操作；0.1.8 免 Root 网络与完整连接尚未验证**。
 构建、API lint 或启动测试通过，不等于硬件 USB、认证或解码已成功。
 
 应用标识为 `com.shihab.diplay.legacy`，可以与现有 DiPlay 并存。此工程单独使用
@@ -106,10 +106,10 @@ CI 使用临时调试签名，不同构建的签名可能不同。更新安装�
 | 视频持续 60 秒 | Baseline、High 各 30 秒，复用同一解码器连续送入循环片段；每种预期输入/输出 900 帧，记录 native 内存前后值 | 解码与显示的短时持续运行；内存值不包含全部 GPU/解码器占用，不证明长期稳定或真实 CarPlay 延迟 |
 | 音频 PCM / AAC | 44100 Hz 立体声；先左声道 440 Hz、右声道 660 Hz，再双声道 AAC 550 Hz；使用较低测试电平，记录 AudioTrack 写入字节 | 复用有线版的 PCM 字节序转换、AAC/ADTS 解码与旧 AudioTrack 后端；写入成功还需听音确认 |
 | 触控单击 / 拖动 / 双指 | 网格、触点 ID、归一化坐标和 DOWN/UP 状态；结束时记录事件、最大触点与抬起数 | 与连接共用坐标转换；不验证手机端实际接收或响应 |
-| 网络自测（免 Root） | 同意系统 VPN 授权；API 19 使用 IPv4 TUN 和应用内 IPv6 转换，API 21 使用原生 IPv6；测试后关闭 TUN | API 19 检查 UDP 5/5、分片/大包转换和 TCP 双向收发；不经过 USB/NCM 或 iPhone |
+| 网络自测（免 Root） | 同意系统 VPN 授权；Android 4.4 / 5.x 均使用 IPv4 TUN 和应用内 IPv6 转换；测试后关闭 TUN | 检查 UDP 5/5、分片/大包转换和 TCP 双向收发；不经过 USB/NCM 或 iPhone |
 
 音频测试前把车机音量调到适中。网络自测可能替换正在使用的其他 VPN，测试前结束其他 VPN；
-Android 4.4 添加应用内部使用的 198.18.0.0/24 IPv4 路由，Android 5 使用链路本地 IPv6 路由；
+Android 4.4 / 5.x 添加应用内部使用的 198.18.0.0/24 IPv4 路由；
 不配置默认路由或 DNS。停止后日志应出现「网络自测 TUN 已关闭」。
 网络自测无需认证资产、Root 或电脑；0.1.7 已移除旧版 Root/ADB 辅助。
 
@@ -186,7 +186,7 @@ INTERNET 权限正常。启用 Root 后 su 约 70 ms 退出，未建立规则；
 [AOSP 的部分旧式 su](https://android.googlesource.com/platform/system/extras/+/906d825/su/su.c)
 仅允许 root/shell 调用，所以 ADB 可执行 su 不代表普通应用也能获得 Root。
 
-上述是 0.1.5 的实现记录；当前按以下 0.1.7 免 Root 步骤验证。源码 APK 的缺少认证身份提示仍符合预期。
+上述是 0.1.5 的实现记录；当前按以下免 Root 步骤验证。源码 APK 的缺少认证身份提示仍符合预期。
 
 0.1.5 后续真机报告：连续两次完整通过配置 1→5、MUX 1/0、NCM 控制 2/0、
 NCM 数据 3/1、释放接口和恢复配置 1，最终状态读回也通过。USB 接口操作与清理现已得到
@@ -222,11 +222,11 @@ TCP 握手与应用 Socket 双向收发，最后确认 TUN 已关闭。五次 UD
 17、64、1232、4097、32769 字节，同时检查 MTU 边界、分片和大包 TUN 写入。失败时导出完整日志。
 旧版保存的 Root/ADB 设置不会生效；Root 执行代码、菜单及辅助脚本已从当前源码移除。
 
-Android 4.4 的系统 Socket/TUN 使用 198.18.0.2/24，iPhone USB 链路仍看到 fe80::2。
+当前 Android 4.4 / 5.x 的系统 Socket/TUN 使用 198.18.0.2/24，iPhone USB 链路仍看到 fe80::2。
 应用将两侧 IP 头、TCP/UDP/ICMP 校验和进行转换，保留端口、TCP 序号与应用有效载荷。
 对手机链路本地地址建立每次连接独立、最多 16 项的映射，不转发普通局域网或 Internet。
 AirPlay 控制、音频、时钟、保活、事件、视频及数据通道使用相同本地地址族；
-其他 DiPlay 后端的默认绑定方式不变。Android 5 仍使用原生 IPv6。
+其他 DiPlay 后端的默认绑定方式不变。0.1.7 中 Android 5 仍使用原生 IPv6，0.1.8 已统一为转换通路。
 
 转换规则参考 [RFC 7915](https://www.rfc-editor.org/rfc/rfc7915.html)，邻居发现参考
 [RFC 4861](https://www.rfc-editor.org/rfc/rfc4861.html)。这是固定 USB 端点转换器，不是完整的
@@ -243,17 +243,30 @@ USB 原生单次传输上限仍为 16 KiB。
 自测中的 IPv6 peer 是本机测试数据：UDP/TCP 使用真实 Android Socket 与授权 TUN fd，
 IPv6 回包由应用生成再转换回 IPv4，不打开 iPhone USB，不进行认证。
 它能验证这台 ROM 的免 Root IPv4 通路，不能替代实际 NCM、认证与完整 CarPlay 会话。
-0.1.7 尚需 T3 实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
+0.1.8 尚需实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
+
+### 0.1.8：Android 5.1 也使用免 Root 转换
+
+用户在 Samsung SM-P600、Android 5.1.1 / API 22 上测试 0.1.7：
+原生 IPv6 UDP bind 成功，但 sendto 返回 ENETUNREACH；TUN 随后关闭。
+566 个 NCM 协议离线场景及 IPv4/IPv6 转换通过。这证明离线转换通过，
+不证明真实 Socket/TUN、USB bulk 或完整连接成功，也不能仅凭此日志确定厂商路由错误的根因。
+
+0.1.8 不再根据 API 21 分界选择原生 IPv6。连接、USB 桥和网络自测在所有支持版本上
+使用同一 IPv4/IPv6 转换通路；Android 5 的 VPN 仍仅允许本应用 UID。
+API 19、21、22 回归测试检查真实 Builder 调用的 IPv4 地址、唯一 /24 路由、MTU 与应用范围。
+没有自动退回 Root 或修改系统规则。复测应显示“模式=免 Root IPv4/IPv6 转换”、
+IPv4 UDP bind、UDP 5/5、TCP 双向回包和 TUN 已关闭。无需连接 iPhone。
 
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |
 | 旧内核传输 | 每次最多 16 KiB，IO 使用原生缓冲区，避免在阻塞期间固定 Java 数组；需要检查 T3 内核/SELinux 是否允许相关 ioctl |
-| NCM 网络 | NTB16 有界分片重组；TUN 用 poll；API 19 使用 IPv4/IPv6 端点转换，API 21 使用作用域 IPv6；需实机检查 VPN 支持 |
+| NCM 网络 | NTB16 有界分片重组；TUN 用 poll；Android 4.4 / 5.x 均使用 IPv4/IPv6 端点转换；需实机检查 VPN 支持 |
 | 超时 | 启动前的 NCM NAK 超时丢弃该数据报；CarPlay 启动后超时终止连接，不重发可能部分发送的块 |
 | 解码 | API 16 的 MediaCodec 缓冲区数组；Surface 变化重建解码器；队列溢出等待关键帧；需确认厂商解码器实际输出 |
 | 音频 | API 19 AudioTrack 构造器和缓冲区写入；PCM 字节序转换、AAC ADTS；车机 DSP/通话/媒体路由未验证 |
-| Android 5 | 同一 APK 的目标；API 21 启动检查通过，但连接和影音仍需实机验证 |
+| Android 5 | 同一 APK 的目标；API 21 / 22 检查网络配置，但连接和影音仍需实机验证 |
 
 若 ROM 裁掉或拒绝 VPN/TUN，当前方案不能连接；免 Root 转换仍依赖 Android 的标准 VPN 能力。
 应用不修改系统网络规则。认证身份仍由用户自行提供，不能用网络转换代替认证。
