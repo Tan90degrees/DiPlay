@@ -13,12 +13,15 @@ def main():
     parser.add_argument('mode', choices=['inspect', 'pair', 'session', 'iap2', 'self-test'], default='inspect', nargs='?')
     parser.add_argument('--studio', type=Path, default=Path('C:/Program Files/Android/Android Studio'))
     parser.add_argument('--auth-assets', type=Path, help='Private directory containing offline-mfi (iap2 mode only)')
+    parser.add_argument('--legacy-tls', action='store_true', help='Compile the APK legacy TLS factory; do not register global providers')
+    parser.add_argument('--record-dir', type=Path, help='Separate private pairing-record directory for this phone')
     args = parser.parse_args()
     if args.mode == 'iap2' and not args.auth_assets:
         parser.error('iap2 requires --auth-assets pointing to your private authentication asset directory')
     here = Path(__file__).resolve().parent
     repo = here.parents[2]
     private = repo / '.private' / 'desktop-pairing'
+    records = args.record_dir.resolve() if args.record_dir else private
     private.mkdir(parents=True, exist_ok=True)
     java = args.studio / 'jbr/bin/java.exe'
     kotlin = args.studio / 'plugins/Kotlin/kotlinc'
@@ -62,6 +65,8 @@ def main():
              'Iap2CsmChannel.kt', 'Iap2FileTransferReceiver.kt', 'Iap2IdentificationClient.kt',
              'Iap2VehicleStatus.kt', 'I2cTransport.kt']
     sources = [transport / name for name in names]
+    if args.legacy_tls:
+        sources[sources.index(transport / 'LockdownTlsEngineFactory.kt')] = repo / 'legacy-wired/app/src/main/java/com/shilapi/xcertplay/transport/LockdownTlsEngineFactory.kt'
     common = transport.parent
     sources += sorted((common / 'iap2').rglob('*.kt'))
     sources += [common / 'mfi' / name for name in ['MfiAuthenticationClient.kt',
@@ -75,15 +80,15 @@ def main():
     output = private / 'desktop-pairing.jar'
     command = [str(java), '-cp', str(kotlin / 'lib/*'), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
         '-kotlin-home', str(kotlin), '-jvm-target', '17', '-classpath',
-        os.pathsep.join(map(str, [dependency, certificate_parser])), '-d', str(output)]
+        os.pathsep.join(map(str, [dependency, certificate_parser, *tls_dependencies])), '-d', str(output)]
     command += [str(p) for p in sources + [exceptions] + sorted((here / 'src').glob('*.kt'))]
     subprocess.run(command, check=True, cwd=repo)
     print('Compiled shared pairing source SHA256:', fingerprint, flush=True)
     classpath = os.pathsep.join(map(str, [output, dependency, certificate_parser,
         *tls_dependencies, kotlin / 'lib/kotlin-stdlib.jar']))
     invocation = [str(java), '-Ddiplay.python=' + sys.executable,
-        '-Ddiplay.bridge=' + str(here / 'bridge.py'), '-cp', classpath,
-        'com.shilapi.xcertplay.transport.DesktopPairingProbeKt', '--' + args.mode, str(private)]
+        '-Ddiplay.bridge=' + str(here / 'bridge.py'), '-Ddiplay.legacyTls=' + str(args.legacy_tls).lower(), '-cp', classpath,
+        'com.shilapi.xcertplay.transport.DesktopPairingProbeKt', '--' + args.mode, str(records)]
     if args.auth_assets:
         invocation.append(str(args.auth_assets.resolve() / 'offline-mfi'))
     result = subprocess.run(invocation, cwd=repo)

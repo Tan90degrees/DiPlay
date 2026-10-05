@@ -12,8 +12,8 @@ android {
         applicationId = "com.shihab.diplay.legacy"
         minSdk = 19
         targetSdk = 28
-        versionCode = 13
-        versionName = "0.1.12-wired-experimental"
+        versionCode = 14
+        versionName = "0.1.13-wired-experimental"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild { ndkBuild { arguments += "APP_PLATFORM=android-19" } }
         multiDexEnabled = true
@@ -47,6 +47,7 @@ android {
 
 dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.79")
+    implementation("org.bouncycastle:bctls-jdk18on:1.79")
     implementation("androidx.multidex:multidex:2.0.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     testImplementation("junit:junit:4.13.2")
@@ -82,7 +83,8 @@ val stageProtocols by tasks.registering(Sync::class) {
     include("com/shilapi/xcertplay/transport/**")
     exclude("**/Ch341*.kt", "**/LinuxI2cTransport.kt", "**/IphoneUsbHost.kt",
         "**/IphoneCarPlayConfiguration.kt", "**/NcmFunctionDiscovery.kt", "**/NcmUsbBridge.kt",
-        "**/BluetoothRfcommDuplexStream.kt", "**/Iap2WirelessControlClient.kt")
+        "**/BluetoothRfcommDuplexStream.kt", "**/Iap2WirelessControlClient.kt",
+        "**/LockdownTlsEngineFactory.kt") // Legacy supplies an isolated application TLS backend.
     include("com/shilapi/xcertplay/mfi/MfiAuthenticationClient.kt",
         "com/shilapi/xcertplay/mfi/LocalMfiAuthenticationClient.kt",
         "com/shilapi/xcertplay/mfi/Iap2MfiAuthenticationClient.kt")

@@ -47,3 +47,14 @@ iAP2 身份识别，以及实验身份的 `0xaa05 AuthenticationSucceeded`。
 脱敏记录见 [VERIFICATION.md](VERIFICATION.md)。
 
 本机通道格式参考 [pymobiledevice3 usbmux 实现](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/usbmux.py)。
+
+0.1.13 的旧版 APK 为 USB Lockdown 自带独立 BC/BCJSSE 1.79，不依赖 T3 系统
+SSLEngine 的 TLS 1.2 支持。用 `--legacy-tls` 编译 APK 实际使用的 TLS 工厂，
+此模式不会注册桌面全局 provider。其他共享协议源码仍保持一致。
+多台手机可用 `--record-dir` 隔离记录，例如：
+
+```powershell
+python legacy-wired/tools/desktop-pairing/run.py iap2 --legacy-tls --record-dir .private/desktop-pairing/iphone13 --auth-assets .private/verification/standalone-assets
+```
+
+旧版 SSLEngine provider 与 Android 原生执行仍需实机验证；此入口运行在桌面 JVM。

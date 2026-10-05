@@ -78,6 +78,7 @@ class WiredController(
         status("建立 USBMUX；请解锁 iPhone 并允许信任…")
         val mux = own(Iap2UsbMuxHost.open(pipe, onDiagnostic = { status(it) }))
         status("打开 iAP2 CarKit 服务…")
+        status("USB TLS：${LockdownTlsEngineFactory.BACKEND_DESCRIPTION}")
         val carKitClient = LockdownCarKitClient(mux)
         val carkit = own(LockdownRecovery.open(identityStore.loadLockdown(), pair = {
             status("等待 iPhone 信任配对…")

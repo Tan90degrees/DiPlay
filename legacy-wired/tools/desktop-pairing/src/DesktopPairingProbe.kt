@@ -177,13 +177,15 @@ fun main(args: Array<String>) {
                 // BC 1.79 accepts the empty issuer profile already accepted by the real Pair.
                 val provider = Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider")
                     .getDeclaredConstructor().newInstance() as java.security.Provider
-                java.security.Security.insertProviderAt(provider, 1)
+                val legacyTls = java.lang.Boolean.getBoolean("diplay.legacyTls")
+                if (!legacyTls) java.security.Security.insertProviderAt(provider, 1)
                 val tlsProvider = Class.forName("org.bouncycastle.jsse.provider.BouncyCastleJsseProvider")
                     .getDeclaredConstructor(java.security.Provider::class.java).newInstance(provider) as java.security.Provider
-                java.security.Security.insertProviderAt(tlsProvider, 2)
+                if (!legacyTls) java.security.Security.insertProviderAt(tlsProvider, 2)
                 // Limit BC provider logging to errors; never emit TLS payloads or certificate details.
                 java.util.logging.Logger.getLogger("org.bouncycastle").level = java.util.logging.Level.SEVERE
-                println("Desktop TLS uses BC/BCJSSE 1.79 for Lockdown's empty-issuer profile (not Android's provider).")
+                println(if (legacyTls) "Using the APK legacy USB TLS factory with isolated BC/BCJSSE; global providers unchanged."
+                    else "Desktop TLS uses BC/BCJSSE 1.79 for Lockdown's empty-issuer profile (not Android's provider).")
                 val properties = Properties().apply {
                     File(directory, "pair-record.properties").inputStream().use { load(it) }
                 }

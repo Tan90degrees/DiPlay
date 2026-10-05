@@ -397,6 +397,15 @@ iPhone 的可选 `TimeIntervalSince1970`。手机不提供该值时回退车机�
 
 ## 自动验证
 
+0.1.12 的 T3 实测已经通过 Pair；后续系统 SSLEngine 报告不支持 TLS 1.2/1.3。
+0.1.13 仅在旧版 APK 的 USB Lockdown 通道使用应用内 BC/BCJSSE 1.79，
+通过显式 provider 实例创建证书解析器、密钥管理器和 TLS 引擎，不改全局 provider，
+不启用 TLS 1.0/1.1。现代应用继续使用原共享 TLS 工厂。
+已保存配对记录继续使用，连接报告会标注 `USB TLS：应用内 BCJSSE 1.79`。
+新增 API 19/21/22 自动测试覆盖隔离 provider、不改变配对材料，以及真实 TLS 1.2
+双向证书握手、73 字节传输分片和 32769 字节加密回包。
+这些测试不代表 T3 Dalvik 或真实 NCM/CarPlay 已通过。
+
 测试覆盖 USB 描述符截断与畸形输入、alternate 选择、NCM 分片/合并及短包填充、
 队列内存上限与关键帧恢复、PCM/AAC 的能力声明、原有 `/info` 回归、
 API 19 / 21 启动销毁、认证缺失时拒绝连接、私有身份持久化、
