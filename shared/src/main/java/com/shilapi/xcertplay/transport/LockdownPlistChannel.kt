@@ -12,6 +12,9 @@ sealed class LockdownPlistValue {
     data class Dictionary(val entries: Map<String, LockdownPlistValue>) : LockdownPlistValue()
     data class Text(val value: String) : LockdownPlistValue()
     data class Integer(val value: Long) : LockdownPlistValue()
+    data class Real(val value: Double) : LockdownPlistValue() {
+        init { require(value.isFinite()) { "Plist real must be finite" } }
+    }
     data class Boolean(val value: kotlin.Boolean) : LockdownPlistValue()
 
     class Data(bytes: ByteArray) : LockdownPlistValue() {
@@ -203,6 +206,10 @@ class LockdownPlistChannel(
                 simpleText(parser, "integer").trim().toLongOrNull()
                     ?: throw IphoneUsbException.Protocol("Invalid Lockdown plist integer"),
             )
+            "real" -> LockdownPlistValue.Real(
+                simpleText(parser, "real").trim().toDoubleOrNull()?.takeIf { it.isFinite() }
+                    ?: throw IphoneUsbException.Protocol("Invalid Lockdown plist real"),
+            )
             "true" -> {
                 requireEmpty(parser, "true")
                 LockdownPlistValue.Boolean(true)
@@ -247,6 +254,7 @@ class LockdownPlistChannel(
             }
             is LockdownPlistValue.Text -> append("<string>").appendEscaped(value.value).append("</string>")
             is LockdownPlistValue.Integer -> append("<integer>").append(value.value).append("</integer>")
+            is LockdownPlistValue.Real -> append("<real>").append(value.value).append("</real>")
             is LockdownPlistValue.Boolean -> append(if (value.value) "<true/>" else "<false/>")
             is LockdownPlistValue.Data -> append("<data>")
                 .append(Base64.getEncoder().encodeToString(value.bytes))

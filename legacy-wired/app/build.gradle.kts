@@ -12,8 +12,8 @@ android {
         applicationId = "com.shihab.diplay.legacy"
         minSdk = 19
         targetSdk = 28
-        versionCode = 12
-        versionName = "0.1.11-wired-experimental"
+        versionCode = 13
+        versionName = "0.1.12-wired-experimental"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild { ndkBuild { arguments += "APP_PLATFORM=android-19" } }
         multiDexEnabled = true
@@ -97,6 +97,7 @@ val stageProtocolTests by tasks.registering(Sync::class) {
     from("../../shared/src/test/java")
     include("com/shilapi/xcertplay/airplay/AirPlayInfoPlistTest.kt",
         "com/shilapi/xcertplay/transport/UsbMuxFrameBufferTest.kt",
+        "com/shilapi/xcertplay/transport/LockdownCertificateProfileTest.kt",
         "com/shilapi/xcertplay/transport/Ntb16CodecTest.kt",
         "com/shilapi/xcertplay/transport/EthernetIpv6CodecTest.kt",
         "com/shilapi/xcertplay/transport/Iap2ControlDeadlineTest.kt",

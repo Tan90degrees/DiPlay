@@ -81,7 +81,7 @@ class WiredController(
         val carKitClient = LockdownCarKitClient(mux)
         val carkit = own(LockdownRecovery.open(identityStore.loadLockdown(), pair = {
             status("等待 iPhone 信任配对…")
-            LockdownPairingClient(mux).pair("DiPlayLegacy", identityStore.uuid("host"), identityStore.uuid("buid"), 120_000,
+            LockdownPairingClient(mux, onProgress = status).pair("DiPlayLegacy", identityStore.uuid("host"), identityStore.uuid("buid"), 120_000,
                 isCancelled = closed::get).pairRecord.also(identityStore::saveLockdown)
         }, invalidate = identityStore::resetPhone, open = { record -> carKitClient.open(record, "DiPlayLegacy") }, report = status))
         // The formatter includes raw TLV bodies on later lines. Reports retain headers only.

@@ -375,6 +375,26 @@ QueryType 的请求/响应格式参考
 若 ROM 裁掉或拒绝 VPN/TUN，当前方案不能连接；免 Root 转换仍依赖 Android 的标准 VPN 能力。
 应用不修改系统网络规则。认证身份仍由用户自行提供，不能用网络转换代替认证。
 
+### 0.1.11 T3 连接实测与 0.1.12 配对兼容调整
+
+用户在 Android 4.4.2 / API 19 的 T3 上确认本地实验身份加载、证书/密钥签名自检通过，
+USBMUX 已建立，Lockdown 两次返回 `InvalidPairRecord`。这证明 MUX 数据链路已经
+交换实际配对协议报文；失败发生在 Lockdown，尚不能证明 iPhone 接受了 iAP2/MFi 身份。
+配置 5 的 MUX/NCM 接口占用、alternate、释放与内核驱动恢复再次通过。
+
+本次完整网络日志确认免 Root UDP 5/5（17、64、1232、4097、32769 字节）及 TCP
+握手/应用 Socket 双向回包通过，最后两项 UDP 分别重组 4、27 个 IPv4 分片；TUN 已关闭。
+离线 566 个 NCM 场景也通过。无需重复这些已完成的诊断。
+
+0.1.12 对尚未成功配对的 HostID/SystemBUID 规范为大写 UUID，保留已成功配对的标识。
+连接先校验 QueryType；证书使用正序列号、有效期起点回退 60 秒，并优先使用
+iPhone 的可选 `TimeIntervalSince1970`。手机不提供该值时回退车机时间，支持整数和
+实数 plist；保留空 issuer/subject、SHA256/RSA 和现有扩展。Pair 补充 HostName，
+日志区分 QueryType、SetValue、GetValue 和 Pair，不记录证书、私钥或手机标识。
+这些调整针对兼容性疑点，仍需实机确认能否消除 `InvalidPairRecord`，不宣称根因已确认。
+证书格式参考 [pymobiledevice3 的配对证书实现](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/ca.py)，
+请求顺序参考其 [Lockdown 实现](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/lockdown.py)。
+
 ## 自动验证
 
 测试覆盖 USB 描述符截断与畸形输入、alternate 选择、NCM 分片/合并及短包填充、

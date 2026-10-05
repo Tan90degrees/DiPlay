@@ -9,6 +9,7 @@ import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import java.io.File
 import java.util.UUID
+import java.util.Locale
 
 /** Private API-19 storage; the application disables backup of all pairing material. */
 class LegacyIdentity(private val context: Context) {
@@ -22,8 +23,14 @@ class LegacyIdentity(private val context: Context) {
                 .putString("id", it.pairingId).commit()) { "Cannot persist accessory identity" }
         }
     }
-    fun uuid(key: String): String = prefs.getString(key, null) ?: UUID.randomUUID().toString().also {
-        check(prefs.edit().putString(key, it).commit())
+    fun uuid(key: String): String {
+        val stored = prefs.getString(key, null)
+        val candidate = stored ?: UUID.randomUUID().toString()
+        // Keep an accepted saved PairRecord byte-for-byte; normalize IDs for new pairing only.
+        val value = if ((key == "host" || key == "buid") && !prefs.contains("lockdown-device-key"))
+            candidate.uppercase(Locale.US) else candidate
+        if (stored != value) check(prefs.edit().putString(key, value).commit())
+        return value
     }
     fun pairings(): PairingStore {
         val paired = context.getSharedPreferences("airplay-pairings", Context.MODE_PRIVATE)

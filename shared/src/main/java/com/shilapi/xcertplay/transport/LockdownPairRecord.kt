@@ -126,6 +126,7 @@ object LockdownPairRecordGenerator {
         wifiAddress: String,
         hostId: String,
         systemBuid: String,
+        nowMillis: Long = System.currentTimeMillis(),
     ): LockdownPairRecord {
         require(devicePublicKeyPkcs1Pem.isNotEmpty()) { "devicePublicKeyPkcs1Pem must not be empty" }
         require(wifiAddress.isNotBlank()) { "wifiAddress must not be blank" }
@@ -133,7 +134,7 @@ object LockdownPairRecordGenerator {
         require(systemBuid.isNotBlank()) { "systemBuid must not be blank" }
 
         val copiedDeviceKey = devicePublicKeyPkcs1Pem.copyOf()
-        val material = CertificateMaterialGenerator.generate(copiedDeviceKey)
+        val material = CertificateMaterialGenerator.generate(copiedDeviceKey, nowMillis)
         return LockdownPairRecord.create(
             hostId = hostId,
             systemBuid = systemBuid,
@@ -164,7 +165,7 @@ internal class CertificateMaterial(
     val rootCertificatePem: ByteArray get() = storedRootCertificatePem.copyOf()
 }
 
-/** Minimal Android/JCA implementation of the certificate profile used by the locked dependency. */
+/** Android/JCA implementation of the local Lockdown certificate profile; no MFi credentials. */
 private object CertificateMaterialGenerator {
     private const val RSA_KEY_BITS = 2048
     private const val CERTIFICATE_LIFETIME_SECONDS = 10L * 365 * 24 * 60 * 60
@@ -173,7 +174,7 @@ private object CertificateMaterialGenerator {
     private val sha256WithRsa = algorithmIdentifier("1.2.840.113549.1.1.11")
     private val rsaEncryption = algorithmIdentifier("1.2.840.113549.1.1.1")
 
-    fun generate(devicePublicKeyPem: ByteArray): CertificateMaterial {
+    fun generate(devicePublicKeyPem: ByteArray, nowMillis: Long): CertificateMaterial {
         val devicePublicKey = parsePkcs1RsaPublicKey(devicePublicKeyPem)
         val rootKeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(RSA_KEY_BITS) }.generateKeyPair()
         val hostKeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(RSA_KEY_BITS) }.generateKeyPair()
@@ -181,7 +182,7 @@ private object CertificateMaterialGenerator {
             ?: throw GeneralSecurityException("Generated root key is not RSA")
         val hostPublicKey = hostKeyPair.public as? RSAPublicKey
             ?: throw GeneralSecurityException("Generated host key is not RSA")
-        val now = System.currentTimeMillis()
+        val now = nowMillis
         val emptyName = distinguishedName(null)
         val rootDer = certificate(
             issuer = emptyName,
@@ -233,11 +234,11 @@ private object CertificateMaterialGenerator {
         require(nowMillis in 0 until notAfterMillis) { "Invalid certificate validity" }
         val tbs = sequence(
             explicit(0, integer(BigInteger.valueOf(2))),
-            integer(BigInteger.ZERO),
+            integer(BigInteger.ONE),
             sha256WithRsa,
             issuer,
             sequence(
-                certificateTime(nowMillis),
+                certificateTime((nowMillis - 60_000L).coerceAtLeast(0)),
                 certificateTime(notAfterMillis),
             ),
             subject,
