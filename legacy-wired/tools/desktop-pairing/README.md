@@ -42,6 +42,8 @@ Android APK 不加载这里的桌面适配器；仅用于减少配对问题的�
 
 2026-10-05 的真实 iPhone8,1 / iOS 15.8.8 已通过 Pair、记录复用、TLS、CarKit、
 iAP2 身份识别，以及实验身份的 `0xaa05 AuthenticationSucceeded`。
+同日换成实际用车的 iPhone 13（手机报告 iPhone14,5 / iOS 26.6.2），
+使用独立的新配对记录后，同样通过上述流程。
 脱敏记录见 [VERIFICATION.md](VERIFICATION.md)。
 
 本机通道格式参考 [pymobiledevice3 usbmux 实现](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/usbmux.py)。

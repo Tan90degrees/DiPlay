@@ -46,3 +46,34 @@ NCM and complete CarPlay media are not tested by this probe.
 桌面没有选择 CarPlay USB 配置、打开 USB NCM、发送 CarPlayStartSession、接收画面或播放声音。
 当前配对源码在此手机上未复现 `InvalidPairRecord`；不能据此确定旧版本在 T3 上失败的唯一原因。
 实验身份在此手机上的接受结果不代表其他 iOS 版本持续接受或 Apple 官方认证。
+
+## 实际用车手机：iPhone 13
+
+同日，用户将连接设备换成实际用于车机验证的 iPhone 13。
+真实 Lockdown 返回 `ProductType=iPhone14,5`、`ProductVersion=26.6.2`。
+探针使用新的独立 HostID/SystemBUID，记录保存在本地
+`.private/desktop-pairing/iphone13`，没有复用上一台手机的配对材料。
+共享协议源码、桌面 TLS provider 和实验认证资产与上次测试相同。
+
+```text
+ProductType=iPhone14,5
+ProductVersion=26.6.2
+Real Pair accepted; record saved only to private local storage.
+Real StartSession accepted the same record and requested TLS.
+Reusing the private record previously accepted by Pair; no new identity is generated.
+Real TLS handshake and encrypted Lockdown QueryType roundtrip passed.
+TLS session stopped and closed.
+Real CarKit service startup and port connection passed.
+IAP2 READY [desktop-wired] ready=true
+IAP2 RX [desktop-wired] 0x1d02 IdentificationAccepted frame=6B body=0 params
+IAP2 RX [desktop-wired] 0xaa00 RequestAuthenticationCertificate frame=6B body=0 params
+IAP2 TX [desktop-wired] 0xaa01 AuthenticationCertificate frame=617B body=1 params
+IAP2 RX [desktop-wired] 0xaa02 RequestAuthenticationChallengeResponse frame=42B body=1 params
+IAP2 TX [desktop-wired] 0xaa03 AuthenticationResponse frame=74B body=1 params
+IAP2 RX [desktop-wired] 0xaa05 AuthenticationSucceeded frame=6B body=0 params
+IAP2 CLOSE [desktop-wired]
+```
+
+该次 Pair 和 iAP2 验证均以 exit=0 结束，没有复现 `InvalidPairRecord`。
+这补充了实际用车手机对当前共享代码和实验身份的接受证据；上文关于桌面 TLS
+provider、未打开 NCM、未启动完整 CarPlay，以及尚未验证 Android 运行时的边界仍然适用。
