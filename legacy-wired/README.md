@@ -2,7 +2,7 @@
 
 这个独立 Gradle 工程面向 Android **4.4.2 / API 19、ARMv7** 老车机，首个目标设备为
 Allwinner T3、四核 Cortex-A7、1 GB RAM、1024×600 屏幕。最低版本为 API 19，
-也在 API 21 / 22 的模拟框架中检查网络配置。**T3 真机已验证解码、音频和 USB 接口操作；SM-P600 的 0.1.9 免 Root 网络自测已通过，T3 网络及完整连接仍需验证**。
+也在 API 21 / 22 的模拟框架中检查网络配置。**T3 真机已验证解码、音频和 USB 接口操作；用户确认 T3 与 SM-P600 的 0.1.9 免 Root 网络自测均通过，完整连接仍需验证**。
 构建、API lint 或启动测试通过，不等于硬件 USB、认证或解码已成功。
 
 应用标识为 `com.shihab.diplay.legacy`，可以与现有 DiPlay 并存。此工程单独使用
@@ -243,7 +243,7 @@ USB 原生单次传输上限仍为 16 KiB。
 自测中的 IPv6 peer 是本机测试数据：UDP/TCP 使用真实 Android Socket 与授权 TUN fd，
 IPv6 回包由应用生成再转换回 IPv4，不打开 iPhone USB，不进行认证。
 它能验证这台 ROM 的免 Root IPv4 通路，不能替代实际 NCM、认证与完整 CarPlay 会话。
-当前版本尚需实机报告；若 IPv4 也被厂商阻断，自测会失败，不能承诺免 Root 已成功。
+T3 与 SM-P600 的通过记录见下文；其他 ROM 若阻断 IPv4/TUN，自测仍可能失败。
 
 ### 0.1.8：Android 5.1 也使用免 Root 转换
 
@@ -292,11 +292,11 @@ API 19 不加载 API 21 的 Network 类型，继续使用系统 UID 路由并输
 
 这验证了该平板的免 Root Socket/TUN 通路、应用内地址转换、分片及本轮清理。
 它不经过 iPhone USB/NCM 或真实 CarPlay 认证，也不能证明持续运行/拔线重连已通过。
-Android 4.4 的 API 19 通路不使用进程网络选择；需在 T3 上用同一个 0.1.9 APK
-单独运行网络自测，再结合 USB bulk、有效外部认证和完整会话验证。
+Android 4.4 的 API 19 通路不使用进程网络选择；T3 的网络自测通过由用户另行确认，
+不外推或复用平板的分片计数、耗时与进程绑定数据。
 公开记录保留测试结论，不提交用户原始报告或应用 UID。
 
-### 0.1.9 T3 USB 复测（2026-10-05）
+### 0.1.9 T3 USB 与网络复测（2026-10-05）
 
 用户在 Allwinner T3、Android 4.4.2 / API 19、ARMv7 上复测：iPhone USB 授权通过，
 模式切换后可见含 MUX/NCM 的 CarPlay 配置 5/6。两轮接口自测均通过配置 1→5，
@@ -304,16 +304,16 @@ MUX 1/0、NCM 控制 2/0、NCM 数据 3/1 的占用与读回；随后释放接�
 恢复临时断开的内核驱动，并通过原状态读回。没有报告 USB 清理错误。
 
 连接仍在缺少认证身份时按预期停止，尚未执行真实 USB bulk/iAP2/CarPlay 会话。
-这份报告只包含设备诊断、连接尝试和 USB 接口自测，**没有免 Root 网络自测结果**，
-不能把平板的网络通过结论外推到 T3。继续使用 0.1.9，停止当前操作后点击
-“离线自测”→“网络自测（免 Root）”，接受系统 VPN 授权，保存包含 UDP 5/5、
-TCP 双向回包或失败阶段、TUN 关闭的完整日志。此项无需插 iPhone 或提供认证资产。
+所提供附件中可见设备诊断、连接尝试与 USB 接口自测段；用户随后明确确认
+**T3 的免 Root 网络自测也已通过**。据此记录 API 19 网络自测通过，无需重复同项测试。
+这项结论来自用户的实机确认；不补写未提供的分片计数、耗时或清理细节。
+下一阶段验证真实 USB bulk/NCM、有效外部认证及完整 CarPlay 会话。
 
 | 环节 | 实现与验证边界 |
 | --- | --- |
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |
 | 旧内核传输 | 每次最多 16 KiB，IO 使用原生缓冲区，避免在阻塞期间固定 Java 数组；需要检查 T3 内核/SELinux 是否允许相关 ioctl |
-| NCM 网络 | NTB16 有界分片重组；TUN 用 poll；Android 4.4 / 5.x 均使用 IPv4/IPv6 端点转换；需实机检查 VPN 支持 |
+| NCM 网络 | NTB16 有界分片重组；TUN 用 poll；T3 与 SM-P600 的免 Root Socket/TUN 自测通过；真实 USB/NCM 网络仍需验证 |
 | 超时 | 启动前的 NCM NAK 超时丢弃该数据报；CarPlay 启动后超时终止连接，不重发可能部分发送的块 |
 | 解码 | API 16 的 MediaCodec 缓冲区数组；Surface 变化重建解码器；队列溢出等待关键帧；需确认厂商解码器实际输出 |
 | 音频 | API 19 AudioTrack 构造器和缓冲区写入；PCM 字节序转换、AAC ADTS；车机 DSP/通话/媒体路由未验证 |
