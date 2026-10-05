@@ -36,7 +36,8 @@ class VpnNetworkBindingAndroidTest {
         val destination = ReflectionHelpers.callConstructor<IpPrefix>(IpPrefix::class.java,
             ClassParameter.from(InetAddress::class.java, InetAddress.getByName(RootlessIp.PREFIX4)), ClassParameter.from(Integer.TYPE, prefix))
         val route = ReflectionHelpers.callConstructor<RouteInfo>(RouteInfo::class.java,
-            ClassParameter.from(IpPrefix::class.java, destination), ClassParameter.from(InetAddress::class.java, null),
+            // Supply the direct-route gateway explicitly: desktop Inet4Address lacks Android's ANY field.
+            ClassParameter.from(IpPrefix::class.java, destination), ClassParameter.from(InetAddress::class.java, InetAddress.getByName("0.0.0.0")),
             ClassParameter.from(String::class.java, name))
         ReflectionHelpers.callInstanceMethod<Any>(this, "addRoute", ClassParameter.from(RouteInfo::class.java, route))
     }
