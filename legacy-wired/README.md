@@ -367,7 +367,7 @@ QueryType 的请求/响应格式参考
 | USB 配置/alternate | 从原始描述符读取；通过授权 USB fd 的 usbfs ioctl 切换，不调用 API 21 的 UsbConfiguration/setInterface |
 | 旧内核传输 | 每次最多 16 KiB，IO 使用原生缓冲区，避免在阻塞期间固定 Java 数组；需要检查 T3 内核/SELinux 是否允许相关 ioctl |
 | NCM 网络 | NTB16 有界分片重组；TUN 用 poll；T3 与 SM-P600 的免 Root Socket/TUN 自测通过；真实 USB/NCM 网络仍需验证 |
-| 超时 | 启动前的 NCM NAK 超时丢弃该数据报；CarPlay 启动后超时终止连接，不重发可能部分发送的块 |
+| 超时 | 首次 NCM OUT 保持同一异步 URB，最长等待 20 秒；成功后单次 2 秒；每 250 ms 检查取消；超时或部分写入终止，不重发 NTB |
 | 解码 | API 16 的 MediaCodec 缓冲区数组；Surface 变化重建解码器；队列溢出等待关键帧；需确认厂商解码器实际输出 |
 | 音频 | API 19 AudioTrack 构造器和缓冲区写入；PCM 字节序转换、AAC ADTS；车机 DSP/通话/媒体路由未验证 |
 | Android 5 | SM-P600 / API 22 的 0.1.9 免 Root 网络自测已通过；完整连接和影音仍需实机验证 |
@@ -404,7 +404,25 @@ iPhone 的可选 `TimeIntervalSince1970`。手机不提供该值时回退车机�
 已保存配对记录继续使用，连接报告会标注 `USB TLS：应用内 BCJSSE 1.79`。
 新增 API 19/21/22 自动测试覆盖隔离 provider、不改变配对材料，以及真实 TLS 1.2
 双向证书握手、73 字节传输分片和 32769 字节加密回包。
-这些测试不代表 T3 Dalvik 或真实 NCM/CarPlay 已通过。
+0.1.13 的 T3 实机记录已经通过该 TLS 后端、iAP2 IdentificationAccepted、
+MFi AuthenticationSucceeded 和 wiredAvailable=true。发送启动请求后约 250 ms，
+NCM OUT 的同步 ioctl 超时导致断开；当时计数未区分邻居发现和注入 TUN 的业务数据。
+这些阶段通过仍不能证明 NCM 双向业务链路或完整 CarPlay 已建立。
+
+0.1.14 不再把排队发送 `0x4301` 视为 USB 数据就绪。首次 OUT 使用同一个
+`USBDEVFS_SUBMITURB` 请求等待，最长 20 秒；成功后 OUT 期限为 2 秒。
+原生缓冲区保留到完成或取消回收，每次 poll 最多 250 ms 并检查停止标志；
+不固定 Java 数组，也不重新提交超时 NTB。回收结果保留 `status` 和
+`actual_length`，任何超时、部分传输、拔线或权限失败均终止，不尝试猜测已发送量。
+NCM 控制接口的 interrupt 通知独立读取，仅记录连接/速度变化，
+不把通知当作成功传输证明。报告区分 Ethernet 入站、TUN 入站与已完成 OUT，
+首次 OUT 只记录包类型/长度，不记录地址、负载或 iPhone USB 标识。
+
+实现依据 Linux 3.10 的 [usbfs URB 与回收语义](https://github.com/torvalds/linux/blob/v3.10/drivers/usb/core/devio.c)
+和 [interrupt endpoint 的同步读取](https://github.com/torvalds/linux/blob/v3.10/drivers/usb/core/message.c)。
+CI 对真实原生 OUT 循环执行 12 个模拟内核场景，包括 15 秒后就绪、完整截止时间、
+取消、部分传输、完成/取消竞争、拔线、权限拒绝和 EINTR；模拟不能证明厂商内核行为。
+下一次仅需更新 APK、插入 iPhone、点击连接，已通过的音视频/本机网络诊断无需重做。
 
 测试覆盖 USB 描述符截断与畸形输入、alternate 选择、NCM 分片/合并及短包填充、
 队列内存上限与关键帧恢复、PCM/AAC 的能力声明、原有 `/info` 回归、

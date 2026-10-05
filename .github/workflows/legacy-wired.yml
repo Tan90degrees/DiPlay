@@ -16,6 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check public source
         run: python3 scripts/check_public_tree.py
+      - name: Native NCM startup, cancellation and partial-transfer regressions
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined legacy-wired/tools/tests/usb_packet_test.c -o /tmp/usb-packet-test
+          /tmp/usb-packet-test
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

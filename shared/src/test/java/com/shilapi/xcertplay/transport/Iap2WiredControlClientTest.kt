@@ -7,6 +7,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class Iap2WiredControlClientTest {
+    @Test fun availabilitySummaryDoesNotExposePhoneIdentifier() {
+        val identifier = "private-phone-identifier"
+        val payload = com.shilapi.xcertplay.iap2.message.Iap2Messages.buildRaw(0x4300) {
+            group(0) { u8(0, 1); string(1, identifier) }
+        }.payload
+        val summary = Iap2WiredControlClient.carPlayAvailabilitySummary(payload)
+        org.junit.Assert.assertFalse(summary.contains(identifier))
+        org.junit.Assert.assertTrue(summary.contains("wiredAvailable=true"))
+        org.junit.Assert.assertTrue(summary.contains("usbTransportPresent=true"))
+    }
     @Test
     fun carPlayStartSessionNestsAddressesInsideWiredAttributes() {
         val frame = Iap2WiredControlClient.carPlayStartSession(

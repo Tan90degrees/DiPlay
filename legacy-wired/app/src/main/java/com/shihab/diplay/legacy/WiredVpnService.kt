@@ -120,7 +120,7 @@ internal class TunBridge(
     private val incoming = AtomicLong()
     private val outgoing = AtomicLong()
     private val deferred = AtomicLong()
-    private val preStartTimeouts = AtomicLong()
+    private val ethernetFrames = AtomicLong()
     private val threads = listOf(worker("legacy-tun-out") {
         val buffer = ByteArray(16384)
         while (!closed.get()) {
@@ -135,6 +135,7 @@ internal class TunBridge(
     }, worker("legacy-tun-in") {
         while (!closed.get()) {
             val frame = ncm.recv(250) ?: continue
+            if (ethernetFrames.incrementAndGet() == 1L) report("USB 网络：首个 NCM Ethernet 入站帧，${frame.size} 字节")
             val received = rootless.incoming(frame)
             received.replies.forEach(::send)
             val packet = received.tun
@@ -145,14 +146,8 @@ internal class TunBridge(
         }
     })
     private fun send(frame: ByteArray) {
-        try {
-            ncm.send(frame)
-            if (outgoing.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 出站帧已写入 NCM")
-        } catch (e: UsbIoException) {
-            // Never resend a possibly partially transmitted NTB.
-            if (e.errno != 110 || ncm.started) throw e
-            if (preStartTimeouts.incrementAndGet() == 1L) report("USB 网络：iAP2 启动前 NCM 暂未就绪；等待手机启动通知")
-        }
+        ncm.send(frame)
+        if (outgoing.incrementAndGet() == 1L) report("USB 网络：首个 IPv6 出站帧已写入 NCM")
     }
     private fun worker(name: String, body: () -> Unit) = Thread({
         try { body() } catch (e: Exception) { if (!closed.get()) failure(e) }
@@ -165,7 +160,7 @@ internal class TunBridge(
         Thread({
             try {
                 threads.forEach { if (it !== Thread.currentThread()) it.join() }
-                report("USB 网络统计：入站=${incoming.get()}，出站=${outgoing.get()}，暂缓=${deferred.get()}，启动前超时=${preStartTimeouts.get()}")
+                report("USB 网络统计：Ethernet 入站=${ethernetFrames.get()}，TUN 入站=${incoming.get()}，出站=${outgoing.get()}，暂缓=${deferred.get()}")
                 tun.close()
             } finally {
                 try { routing.close() }

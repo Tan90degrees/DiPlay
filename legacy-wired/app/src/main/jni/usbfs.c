@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include "usb_packet.h"
 
 #define JNI_METHOD(name) Java_com_shihab_diplay_legacy_NativeUsbIo_##name
 #define UNUSED() (void)env; (void)self
@@ -80,6 +81,31 @@ JNIEXPORT jint JNICALL JNI_METHOD(bulk)(JNIEnv *env, jobject self, jint fd, jint
     int saved_errno = errno;
     if (result > 0 && (endpoint & 0x80)) (*env)->SetByteArrayRegion(env, data, offset, result, (jbyte *)bytes);
     return result < 0 ? -saved_errno : result;
+}
+struct packet_cancel { JNIEnv *env; jobject flag; jmethodID get; };
+static int packet_cancelled(void *opaque) {
+    struct packet_cancel *cancel = opaque;
+    return (*cancel->env)->CallBooleanMethod(cancel->env, cancel->flag, cancel->get) == JNI_TRUE;
+}
+JNIEXPORT jintArray JNICALL JNI_METHOD(packetWrite)(JNIEnv *env, jobject self, jint fd,
+        jint endpoint, jbyteArray data, jint timeout, jobject cancelled) {
+    (void)self;
+    jsize length = (*env)->GetArrayLength(env, data);
+    if (length < 1 || length > 16384) return NULL;
+    jclass flag_class = (*env)->GetObjectClass(env, cancelled);
+    jmethodID get = (*env)->GetMethodID(env, flag_class, "get", "()Z");
+    (*env)->DeleteLocalRef(env, flag_class);
+    if (get == NULL) return NULL;
+    unsigned char bytes[16384];
+    (*env)->GetByteArrayRegion(env, data, 0, length, (jbyte *)bytes);
+    if ((*env)->ExceptionCheck(env)) return NULL;
+    struct packet_cancel cancel = { env, cancelled, get };
+    struct packet_result transfer = usb_packet_write(fd, endpoint, bytes, length, timeout,
+        packet_cancelled, &cancel);
+    jint values[2] = { transfer.status, transfer.actual };
+    jintArray result = (*env)->NewIntArray(env, 2);
+    if (result != NULL) (*env)->SetIntArrayRegion(env, result, 0, 2, values);
+    return result;
 }
 JNIEXPORT jint JNICALL JNI_METHOD(release)(JNIEnv *env, jobject self, jint fd, jint number) {
     UNUSED();

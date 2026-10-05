@@ -4,6 +4,7 @@ package com.shihab.diplay.legacy
 import android.hardware.usb.UsbDeviceConnection
 import java.io.Closeable
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owns a duplicated, Android-authorized USB fd. IO leases prevent fd reuse during detach. */
 class NativeUsb(connection: UsbDeviceConnection) : Closeable {
@@ -11,6 +12,8 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
     private var fd = NativeUsbIo.duplicate(connection.fileDescriptor).also { checkResult(it, "duplicate USB fd") }
     private var users = 0
     private var closed = false
+    private val cancelled = AtomicBoolean(false)
+    private val packetLock = Any() // Only one async URB/reaper per open description.
     private val claimed = mutableSetOf<Int>()
     private val detached = mutableSetOf<Int>()
 
@@ -160,13 +163,21 @@ class NativeUsb(connection: UsbDeviceConnection) : Closeable {
             offset += size
         }
     }
-    fun writePacket(pipe: UsbPipe, bytes: ByteArray) = useFd {
-        require(!pipe.input && pipe.bulk && bytes.size in 1..16384)
-        val count = NativeUsbIo.bulk(it, pipe.address, bytes, 0, bytes.size, 250)
-        checkResult(count, "NCM bulk write")
-        if (count != bytes.size) throw IOException("Partial NCM transfer ($count/${bytes.size}); terminating without retry")
+    fun readNotification(pipe: UsbPipe): ByteArray? = useFd {
+        require(pipe.input && pipe.attributes and 3 == 3)
+        val bytes = ByteArray(pipe.packetSize.coerceAtLeast(16).coerceAtMost(16384))
+        // Linux usb_bulk_msg uses an interrupt URB for an interrupt endpoint.
+        val count = NativeUsbIo.bulk(it, pipe.address, bytes, 0, bytes.size, 100)
+        if (count == -110) null else { checkResult(count, "NCM status read"); bytes.copyOf(count) }
     }
-    override fun close() = synchronized(lock) { closed = true; releaseIfIdle() }
+    fun writePacket(pipe: UsbPipe, bytes: ByteArray, timeoutMillis: Int): Unit = synchronized(packetLock) {
+        useFd {
+            require(!pipe.input && pipe.bulk && bytes.size in 1..16384 && timeoutMillis in 1..20000)
+            val result = NativeUsbIo.packetWrite(it, pipe.address, bytes, timeoutMillis, cancelled)
+            NcmWriteResult.requireComplete(result[0], result[1], bytes.size, pipe.address)
+        }
+    }
+    override fun close() = synchronized(lock) { cancelled.set(true); closed = true; releaseIfIdle() }
     private fun releaseIfIdle() {
         if (closed && users == 0 && fd >= 0) {
             claimed.forEach { NativeUsbIo.release(fd, it) }
@@ -190,6 +201,7 @@ object NativeUsbIo {
     external fun claim(fd: Int, number: Int): Int
     external fun alternate(fd: Int, number: Int, alternate: Int): Int
     external fun bulk(fd: Int, endpoint: Int, data: ByteArray, offset: Int, length: Int, timeout: Int): Int
+    external fun packetWrite(fd: Int, endpoint: Int, data: ByteArray, timeout: Int, cancelled: AtomicBoolean): IntArray
     external fun release(fd: Int, number: Int): Int
     external fun driver(fd: Int, number: Int, name: ByteArray): Int
     external fun disconnect(fd: Int, number: Int): Int

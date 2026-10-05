@@ -93,7 +93,9 @@ class WiredController(
         ncmUsb.claim(function.control)
         ncmUsb.claim(function.data)
         check(ncmUsb.currentAlternate(function.data.number) == function.data.alternate) { "NCM 数据备用接口读回不匹配" }
-        val ncm = own(LegacyNcm(ncmUsb, function.data))
+        val ncm = own(LegacyNcm(ncmUsb, function.data, function.control, status) { error ->
+            status("NCM 状态通道失败：${error.message}"); close()
+        })
         own(vpn.connect(ncm, hostMac, closed, status) { error -> status("USB 网络失败：${error.message}"); close() })
         val rawAddress = vpn.localAddress()
         val tunInterface = vpn.activeInterface()
@@ -143,7 +145,7 @@ class WiredController(
             Iap2WiredCarPlayEndpoint(listOf("fe80::2"), server.localPort, identity.publicKeyHex, "950.7.1", macText),
             availableCurrentMilliAmps = 0,
             timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
-            onProgress = { if (it == "iap2 tx=0x4301 carplay-start-session") ncm.started = true; status(it) },
+            onProgress = status,
         )
         if (!closed.get()) status("iAP2 通道结束：${result.terminal}")
     }

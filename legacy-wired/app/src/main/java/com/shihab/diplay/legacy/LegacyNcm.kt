@@ -5,6 +5,7 @@ import com.shilapi.xcertplay.transport.Ntb16Codec
 import java.io.Closeable
 import java.io.IOException
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Bounded reassembly survives arbitrary 16-KiB USB fragmentation and coalesced NTBs. */
 class NcmReceiveBuffer(private val packetSize: Int = 512) {
@@ -36,9 +37,22 @@ class NcmReceiveBuffer(private val packetSize: Int = 512) {
     private fun u32(i: Int) = u16(i) or (u16(i + 2) shl 16)
 }
 
-class LegacyNcm(private val usb: NativeUsb, private val data: UsbAlternate) : Closeable {
+class LegacyNcm(private val usb: NativeUsb, private val data: UsbAlternate,
+    control: UsbAlternate? = null, private val report: (String) -> Unit = {},
+    private val failure: (Exception) -> Unit = {}) : Closeable {
     private val receiver = NcmReceiveBuffer(checkNotNull(data.input()).packetSize)
-    @Volatile var started = false
+    private val running = AtomicBoolean(true)
+    private val window = NcmWriteWindow()
+    private val statusThread = control?.pipes?.singleOrNull { it.input && it.attributes and 3 == 3 }?.let { endpoint ->
+        Thread({
+            try {
+                while (running.get()) {
+                    usb.readNotification(endpoint)?.let { NcmNotification.summary(it, checkNotNull(control).number)?.let(report) }
+                    Thread.sleep(50)
+                }
+            } catch (e: Exception) { if (running.get()) failure(e) }
+        }, "legacy-ncm-status").apply { start() }
+    }
     private val readLock = Any()
     private val writeLock = Any()
     private var sequence = 0
@@ -60,7 +74,15 @@ class LegacyNcm(private val usb: NativeUsb, private val data: UsbAlternate) : Cl
         if (block.size % checkNotNull(data.output()).packetSize == 0) block += byteArrayOf(0)
         require(block.size <= 16384) { "NCM datagram must fit one legacy USB transfer" }
         sequence = (sequence + 1) and 65535
-        usb.writePacket(checkNotNull(data.output()), block)
+        val timeout = window.timeoutMillis()
+        if (timeout == 20000) report("NCM 首次 OUT：${frameSummary(frame)}；单次请求等待就绪，最长 20 秒，可停止")
+        usb.writePacket(checkNotNull(data.output()), block, timeout)
+        window.completed()
     }
-    override fun close() = usb.close()
+    private fun frameSummary(frame: ByteArray): String {
+        val protocol = if (frame.size > 20) frame[20].toInt() and 255 else -1
+        val icmp = if (protocol == 58 && frame.size > 54) frame[54].toInt() and 255 else -1
+        return "Ethernet=${frame.size} 字节，IPv6 next=$protocol，ICMPv6 type=$icmp"
+    }
+    override fun close() { running.set(false); usb.close(); statusThread?.interrupt() }
 }
